@@ -1,5 +1,42 @@
+# Rust build artifacts
 /target/
-**/*.rs.bk
-.DS_Store
+
+# Cargo lock for libraries; keep for binaries
+# Cargo.lock
+
+# IDE / editors
+.idea/
+.vscode/
 *.swp
+*.swo
 *~
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust backup files
+**/*.rs.bk
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Debugging
+*.pdb
+core
+core.*
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon
+
+# Linux
+.directory
+
+# Windows
+Desktop.ini

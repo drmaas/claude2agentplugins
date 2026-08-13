@@ -3,7 +3,7 @@
 ## Build & Test
 
 ```bash
-cargo test           # Run all tests (48 tests)
+cargo test           # Run all tests (114 tests)
 cargo build          # Debug build
 cargo build --release # Release build
 cargo fmt --all -- --check  # Check formatting

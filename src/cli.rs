@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::convert::{ConversionReport, ConvertOptions, DirectoryReport};
+use crate::error::Result;
 use crate::validate::name;
 
 #[derive(Parser)]
@@ -41,6 +43,19 @@ pub struct Cli {
     )]
     pub dry_run: bool,
 
+    #[arg(
+        long,
+        global = true,
+        help = "Also convert commands/ to portable skills"
+    )]
+    pub convert_commands: bool,
+
+    #[arg(long, global = true, help = "Overwrite non-empty output directories")]
+    pub force: bool,
+
+    #[arg(long, global = true, help = "Emit a machine-readable JSON summary")]
+    pub json: bool,
+
     #[arg(short, long, global = true, help = "Verbose output")]
     pub verbose: bool,
 
@@ -72,6 +87,18 @@ pub enum Command {
         #[arg(short, long, default_value = "./output")]
         output: PathBuf,
     },
+    Validate {
+        path: PathBuf,
+    },
+    Init {
+        name: String,
+
+        #[arg(short, long, default_value = "./")]
+        output: PathBuf,
+
+        #[arg(long, default_value = "A new Agent Plugins plugin")]
+        description: String,
+    },
 }
 
 fn validate_extension_namespace(s: &str) -> std::result::Result<String, String> {
@@ -86,41 +113,19 @@ fn validate_extension_namespace(s: &str) -> std::result::Result<String, String> 
 }
 
 impl Cli {
-    pub fn execute(&self) -> crate::error::Result<()> {
+    fn options(&self) -> ConvertOptions {
+        ConvertOptions {
+            extension_namespace: self.extension_namespace.clone(),
+            strict: self.strict,
+            convert_commands: self.convert_commands,
+            force: self.force,
+            preferred_name: None,
+        }
+    }
+
+    pub fn execute(&self) -> Result<()> {
         if self.dry_run {
-            println!(
-                "[dry-run] Would convert with extension namespace '{}'",
-                self.extension_namespace
-            );
-            match &self.command {
-                Command::Convert { path, output } => {
-                    println!(
-                        "[dry-run] convert {} -> {}",
-                        path.display(),
-                        output.display()
-                    );
-                }
-                Command::ConvertDir { path, output } => {
-                    println!(
-                        "[dry-run] convert-dir {} -> {}",
-                        path.display(),
-                        output.display()
-                    );
-                }
-                Command::ConvertMarketplace {
-                    repo,
-                    branch,
-                    output,
-                } => {
-                    println!(
-                        "[dry-run] convert-marketplace --repo {} --branch {} -> {}",
-                        repo,
-                        branch,
-                        output.display()
-                    );
-                }
-            }
-            return Ok(());
+            return self.dry_run_print();
         }
 
         match &self.command {
@@ -128,29 +133,15 @@ impl Cli {
                 if self.verbose {
                     eprintln!("Converting single plugin: {}", path.display());
                 }
-                crate::convert::convert_single(
-                    path,
-                    output,
-                    &self.extension_namespace,
-                    self.strict,
-                )?;
-                if !self.quiet {
-                    println!("Converted plugin to {}", output.display());
-                }
+                let report = crate::convert::convert_single(path, output, &self.options())?;
+                self.print_report(&report);
             }
             Command::ConvertDir { path, output } => {
                 if self.verbose {
                     eprintln!("Converting plugins in directory: {}", path.display());
                 }
-                crate::convert::convert_directory(
-                    path,
-                    output,
-                    &self.extension_namespace,
-                    self.strict,
-                )?;
-                if !self.quiet {
-                    println!("Converted plugins to {}", output.display());
-                }
+                let report = crate::convert::convert_directory(path, output, &self.options())?;
+                self.print_directory_report(&report);
             }
             Command::ConvertMarketplace {
                 repo,
@@ -160,17 +151,209 @@ impl Cli {
                 if self.verbose {
                     eprintln!("Converting marketplace: {} (branch: {})", repo, branch);
                 }
-                crate::marketplace::convert_marketplace(
-                    repo,
-                    branch,
-                    output,
-                    &self.extension_namespace,
-                    self.strict,
-                )?;
-                if !self.quiet {
-                    println!("Converted marketplace to {}", output.display());
+                let report =
+                    crate::marketplace::convert_marketplace(repo, branch, output, &self.options())?;
+                self.print_directory_report(&report);
+            }
+            Command::Validate { path } => {
+                let (errors, warnings) = crate::validate::plugin::validate_plugin(path);
+                for w in &warnings {
+                    eprintln!("Warning: {}", w);
+                }
+                for e in &errors {
+                    eprintln!("Error: {}", e);
+                }
+                if self.json {
+                    let value = serde_json::json!({
+                        "path": path.display().to_string(),
+                        "errors": errors,
+                        "warnings": warnings,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&value).unwrap());
+                } else {
+                    println!(
+                        "Validated {}: {} error(s), {} warning(s)",
+                        path.display(),
+                        errors.len(),
+                        warnings.len()
+                    );
+                }
+                if !errors.is_empty() {
+                    return Err(crate::error::Error::Validation {
+                        message: format!("{} validation error(s) found", errors.len()),
+                        source: None,
+                    });
                 }
             }
+            Command::Init {
+                name,
+                output,
+                description,
+            } => {
+                self.init_plugin(name, output.as_path(), description)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn dry_run_print(&self) -> Result<()> {
+        println!(
+            "[dry-run] Would convert with extension namespace '{}'",
+            self.extension_namespace
+        );
+        match &self.command {
+            Command::Convert { path, output } => {
+                println!(
+                    "[dry-run] convert {} -> {}",
+                    path.display(),
+                    output.display()
+                );
+            }
+            Command::ConvertDir { path, output } => {
+                println!(
+                    "[dry-run] convert-dir {} -> {}",
+                    path.display(),
+                    output.display()
+                );
+            }
+            Command::ConvertMarketplace {
+                repo,
+                branch,
+                output,
+            } => {
+                println!(
+                    "[dry-run] convert-marketplace --repo {} --branch {} -> {}",
+                    repo,
+                    branch,
+                    output.display()
+                );
+            }
+            Command::Validate { path } => {
+                println!("[dry-run] validate {}", path.display());
+            }
+            Command::Init { name, output, .. } => {
+                println!("[dry-run] init {} -> {}", name, output.display());
+            }
+        }
+        Ok(())
+    }
+
+    fn print_report(&self, report: &ConversionReport) {
+        for w in &report.warnings {
+            eprintln!("Warning: {}", w);
+        }
+        if self.json {
+            let value = serde_json::json!({
+                "name": report.name,
+                "output": report.output.display().to_string(),
+                "manifestSynthesized": report.manifest_synthesized,
+                "skills": report.skills_converted,
+                "commands": report.commands_converted,
+                "mcpServers": report.mcp_servers,
+                "extensions": report.extension_dirs,
+                "warnings": report.warnings,
+            });
+            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+        } else if !self.quiet {
+            println!(
+                "Converted '{}' to {} ({} skills, {} mcp servers, {} extensions{}{})",
+                report.name,
+                report.output.display(),
+                report.skills_converted,
+                report.mcp_servers,
+                report.extension_dirs,
+                if report.commands_converted > 0 {
+                    format!(", {} commands", report.commands_converted)
+                } else {
+                    String::new()
+                },
+                if report.manifest_synthesized {
+                    ", synthesized manifest"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+
+    fn print_directory_report(&self, report: &DirectoryReport) {
+        for plugin in &report.plugins {
+            for w in &plugin.warnings {
+                eprintln!("Warning: {}", w);
+            }
+        }
+        for s in &report.skipped {
+            eprintln!("Skipped: {}", s);
+        }
+        if self.json {
+            let value = serde_json::json!({
+                "converted": report.plugins.len(),
+                "skipped": report.skipped.len(),
+                "plugins": report.plugins.iter().map(|p| {
+                    serde_json::json!({
+                        "name": p.name,
+                        "output": p.output.display().to_string(),
+                        "skills": p.skills_converted,
+                        "commands": p.commands_converted,
+                        "mcpServers": p.mcp_servers,
+                        "extensions": p.extension_dirs,
+                        "warnings": p.warnings,
+                    })
+                }).collect::<Vec<_>>(),
+                "skippedItems": report.skipped,
+            });
+            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+        } else if !self.quiet {
+            println!(
+                "Converted {} plugin(s), skipped {}",
+                report.plugins.len(),
+                report.skipped.len()
+            );
+        }
+    }
+
+    fn init_plugin(&self, name: &str, output: &Path, description: &str) -> Result<()> {
+        if !name::is_valid_plugin_name(name) {
+            return Err(crate::error::Error::Validation {
+                message: format!(
+                    "Invalid plugin name '{}': must be 1-64 chars of lowercase letters, digits, hyphens and periods (no '--' or '..', must start and end alphanumeric)",
+                    name
+                ),
+                source: None,
+            });
+        }
+        let plugin_dir = output.join(name);
+        if plugin_dir.exists() && !self.force {
+            return Err(crate::error::Error::Conversion(format!(
+                "Target '{}' already exists; use --force to overwrite",
+                plugin_dir.display()
+            )));
+        }
+        std::fs::create_dir_all(plugin_dir.join("skills").join(name))?;
+
+        let manifest = serde_json::json!({
+            "$schema": crate::agent_plugins::manifest::PLUGIN_SCHEMA,
+            "name": name,
+            "version": "0.1.0",
+            "description": description,
+            "keywords": [],
+        });
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )?;
+
+        let skill_md = format!(
+            "---\nname: {}\ndescription: {}\n---\n\nWrite instructions for this skill.\n",
+            name, description
+        );
+        std::fs::write(
+            plugin_dir.join("skills").join(name).join("SKILL.md"),
+            skill_md,
+        )?;
+
+        if !self.quiet {
+            println!("Created Agent Plugins plugin at {}", plugin_dir.display());
         }
         Ok(())
     }

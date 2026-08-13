@@ -6,33 +6,33 @@
 src/
 ├── main.rs                 # Entry point
 ├── lib.rs                  # Library root (run function)
-├── cli.rs                  # clap CLI definitions (Cli, Command enums)
+├── cli.rs                  # clap CLI definitions (Cli, Command enums, report printing)
 ├── error.rs                # thiserror error types
 ├── claude/                 # SOURCE format parsers
-│   ├── manifest.rs         # .claude-plugin/plugin.json → ClaudeManifest
-│   ├── mcp.rs              # .mcp.json → ClaudeMcpConfig
-│   ├── skill.rs            # skills/*/SKILL.md → Skill (YAML frontmatter)
-│   └── marketplace.rs      # .claude-plugin/marketplace.json → Marketplace
+│   ├── manifest.rs         # .claude-plugin/plugin.json → ClaudeManifest (+ synthesize for manifest-less plugins)
+│   ├── mcp.rs              # .mcp.json → ClaudeMcpConfig (stdio + remote http/sse/ws servers)
+│   ├── skill.rs            # skills/*/SKILL.md → Skill; root SKILL.md; custom dirs; command files
+│   └── marketplace.rs      # .claude-plugin/marketplace.json → Marketplace (modern object + legacy array)
 ├── agent_plugins/          # TARGET format generators
 │   ├── manifest.rs         # AgentManifest → plugin.json
 │   ├── mcp.rs              # AgentMcpConfig → mcp.json
-│   ├── skill.rs            # AgentSkill → SKILL.md
-│   └── extensions.rs       # Extension data collection
+│   └── skill.rs            # AgentSkill → SKILL.md
 ├── convert/                # Conversion orchestrator
-│   ├── mod.rs              # convert_single, convert_directory, data types
+│   ├── mod.rs              # convert_single / convert_directory, ConvertOptions, ConversionReport
 │   ├── manifest.rs         # ClaudeManifest → AgentManifest
-│   ├── mcp.rs              # ClaudeMcpConfig → AgentMcpConfig
-│   ├── skills.rs           # skills/ → skills/ with validation
-│   ├── extensions.rs       # Non-portable components → extensions namespace
-│   └── env_vars.rs         # Env var substitution
+│   ├── mcp.rs              # ClaudeMcpConfig → AgentMcpConfig (command rewrite, remote servers)
+│   ├── skills.rs           # skills/ → skills/ (validation, normalization, aux file copy); commands → skills
+│   ├── extensions.rs       # Non-portable components → extension namespace (incl. custom paths)
+│   └── env_vars.rs         # Placeholder transformation (${CLAUDE_*} → ${PLUGIN_*}, command rewrite)
 ├── marketplace/            # Marketplace batch mode
-│   ├── mod.rs              # convert_marketplace
-│   ├── clone.rs            # git clone marketplace repo
-│   └── convert.rs          # Batch convert all plugins
+│   ├── mod.rs              # convert_marketplace (git URL, owner/repo, or local directory)
+│   ├── clone.rs            # git clone with ref/sha pinning
+│   └── convert.rs          # Batch convert all plugins (per-source fetch, collision detection)
 └── validate/               # Validation rules
-    ├── name.rs             # Agent Plugins name constraints
+    ├── name.rs             # Plugin/skill name constraints and normalization
     ├── skill.rs            # Skill frontmatter validation
-    └── mcp.rs              # MCP config validation
+    ├── mcp.rs              # MCP config validation
+    └── plugin.rs           # Whole-plugin conformance check (backs `c2ap validate` + self-validation)
 ```
 
 ## Data Flow
@@ -43,43 +43,33 @@ User CLI input
     ▼
 cli.rs (Clap parsing)
     │
-    ▼
-lib.rs::run() → Cli::execute()
+    ├── Command::Convert         → convert::convert_single()
+    ├── Command::ConvertDir      → convert::convert_directory()
+    ├── Command::ConvertMarketplace → marketplace::convert_marketplace()
+    ├── Command::Validate        → validate::plugin::validate_plugin()
+    └── Command::Init            → scaffold plugin.json + skills/<name>/SKILL.md
+
+convert::convert_single(input, output, options)
     │
-    ├── Command::Convert → convert::convert_single()
-    ├── Command::ConvertDir → convert::convert_directory()
-    └── Command::ConvertMarketplace → marketplace::convert_marketplace()
-                                          │
-                                          ▼
-                                    marketplace::clone::clone_repo()
-                                          │
-                                          ▼
-                                    marketplace::convert::batch_convert()
-                                          │
-                                    For each plugin:
-                                          ▼
-                                    convert::convert_single()
-                                          │
-                    ┌─────────────────────┼─────────────────────┐
-                    ▼                     ▼                     ▼
-            claude::manifest     claude::skill::parse_all   claude::mcp::parse
-            ::parse()                                      (optional)
-                    │                     │                     │
-                    ▼                     ▼                     ▼
-            convert::manifest    convert::skills::convert  convert::mcp::convert
-            ::convert()          (writes skills/)          (writes mcp.json)
-                    │
-                    ▼
-            agent_plugins::manifest::write()  →  plugin.json
-                    │
-                    ▼
-            convert::extensions::collect() + write()
+    ├── Resolve manifest (.claude-plugin/plugin.json) or synthesize from dir name
+    ├── Parse skills (skills/, custom paths from manifest, root SKILL.md fallback)
+    ├── Parse + convert .mcp.json (stdio rewrite, remote http/sse, ws → warning)
+    ├── Write plugin.json (with $schema + extensions)
+    ├── Write skills/ (normalized names, aux files copied, allowed-tools as string)
+    ├── Optionally convert commands/ → skills/ (--convert-commands)
+    ├── Copy non-portable components → <extension-namespace>/ (default dirs + custom paths)
+    ├── Copy LICENSE / README.md / CHANGELOG.md
+    └── Self-validate output (validate::plugin) and merge findings into warnings
 ```
 
 ## Key Design Decisions
 
-1. **Lossless conversion**: All Claude-specific data is preserved in `extensions`
-2. **Git clone for marketplaces**: Default approach for marketplace source
-3. **Configurable namespace**: Default `com.claude.code`, overridable via `--extension-namespace`
-4. **Stdio default**: Claude MCP servers are implicit stdio; Agent Plugins requires explicit `type: "stdio"`
-5. **Name normalization**: Claude plugin names are auto-normalized (lowercase, hyphens for spaces/underscores)
+1. **Lossless conversion**: All Claude-specific data is preserved under the extension namespace — as files in a top-level `<namespace>/` directory (per Agent Plugins §8.2) and/or as manifest `extensions` data. This includes the original `.mcp.json`, `bin/`, `settings.json`, and custom component paths.
+2. **Portable core = skills + MCP**: Only skills and MCP servers are portable in Agent Plugins v1. Everything else is parked in extensions, and warnings explain what moved where.
+3. **Manifest-less support**: Claude's manifest is optional, so c2ap synthesizes one from the directory name and handles single-skill plugins with a root `SKILL.md`.
+4. **Spec-valid output**: Commands are rewritten from `${CLAUDE_PLUGIN_ROOT}/...` to `./...` (Agent Plugins does not expand placeholders in `command`), `allowed-tools` is written as a space-separated string, metadata values are stringified, and skill names are normalized. A post-conversion self-check validates the output against the v1.0.0 rules.
+5. **Configurable namespace**: Default `com.claude.code`, overridable via `--extension-namespace`.
+6. **Marketplace formats**: Both the modern `{plugins: [...]}` object format (string sources, `metadata.pluginRoot`, `github`/`url`/`git-subdir`/`npm`/`archive` sources with ref/sha pins) and the legacy bare-array format are parsed. `npm` and `archive` sources use system tools (`npm pack` + `tar`, `curl` + `unzip`) when available.
+7. **Idempotent output**: Non-empty output directories are refused unless `--force` is given; normalized name collisions in `convert-dir`/`convert-marketplace` are reported as errors.
+8. **Stdio default**: Claude MCP servers are implicit stdio; Agent Plugins requires explicit `type: "stdio"`. Remote `http`/`sse` servers map to `streamable-http`/`sse`; `ws` servers have no equivalent and are warned about.
+9. **Name normalization**: Claude plugin names are auto-normalized (lowercase, hyphens for spaces/underscores), and skill names are normalized to the stricter Agent Skills character set.

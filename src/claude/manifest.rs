@@ -32,9 +32,9 @@ pub enum StringOrArrayOrObject {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Experimental {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub themes: Option<Vec<String>>,
+    pub themes: Option<StringOrArray>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub monitors: Option<Vec<String>>,
+    pub monitors: Option<StringOrArray>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -71,24 +71,54 @@ pub struct ClaudeManifest {
     pub mcp_servers: Option<StringOrArrayOrObject>,
     #[serde(rename = "outputStyles")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_styles: Option<Vec<String>>,
+    pub output_styles: Option<StringOrArray>,
     #[serde(rename = "lspServers")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lsp_servers: Option<Vec<String>>,
+    pub lsp_servers: Option<StringOrArrayOrObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<Experimental>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dependencies: Option<HashMap<String, serde_json::Value>>,
+    pub dependencies: Option<Vec<serde_json::Value>>,
     #[serde(rename = "userConfig")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channels: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub workflows: Option<Vec<serde_json::Value>>,
+    pub workflows: Option<StringOrArray>,
     #[serde(rename = "defaultEnabled")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_enabled: Option<bool>,
+}
+
+impl ClaudeManifest {
+    pub fn synthesize(name: &str) -> Self {
+        ClaudeManifest {
+            name: name.to_string(),
+            display_name: None,
+            version: None,
+            description: None,
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: None,
+            metadata: None,
+            skills: None,
+            commands: None,
+            agents: None,
+            hooks: None,
+            mcp_servers: None,
+            output_styles: None,
+            lsp_servers: None,
+            experimental: None,
+            dependencies: None,
+            user_config: None,
+            channels: None,
+            workflows: None,
+            default_enabled: None,
+        }
+    }
 }
 
 pub fn parse(plugin_dir: &Path) -> Result<ClaudeManifest> {

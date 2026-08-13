@@ -13,9 +13,9 @@ pub struct AgentSkill {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub metadata: Option<HashMap<String, String>>,
     #[serde(rename = "allowed-tools", skip_serializing_if = "Option::is_none")]
-    pub allowed_tools: Option<Vec<String>>,
+    pub allowed_tools: Option<String>,
 }
 
 pub fn generate_skill_md(skill: &AgentSkill, body: &str) -> Result<String> {
@@ -65,11 +65,10 @@ mod tests {
             license: Some("MIT".to_string()),
             compatibility: Some(">=1.0.0".to_string()),
             metadata: None,
-            allowed_tools: Some(vec!["bash".to_string(), "read".to_string()]),
+            allowed_tools: Some("Bash(git:*) Read".to_string()),
         };
 
         let output = generate_skill_md(&skill, "Body.").unwrap();
-        assert!(output.contains("allowed-tools:"));
-        assert!(output.contains("- bash"));
+        assert!(output.contains("allowed-tools: Bash(git:*) Read"));
     }
 }

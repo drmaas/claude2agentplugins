@@ -5,10 +5,12 @@ pub fn validate_skill(skill: &Skill) -> Vec<String> {
     let mut warnings = Vec::new();
     let expected_name = name::normalize_name(&skill.dir_name);
 
-    if skill.frontmatter.name != expected_name {
+    if let Some(name) = &skill.frontmatter.name
+        && *name != expected_name
+    {
         warnings.push(format!(
             "Skill '{}': frontmatter name '{}' does not match expected name '{}'",
-            skill.dir_name, skill.frontmatter.name, expected_name
+            skill.dir_name, name, expected_name
         ));
     }
 
@@ -33,7 +35,7 @@ mod tests {
             dir_name: dir_name.to_string(),
             path: PathBuf::from(dir_name),
             frontmatter: SkillFrontmatter {
-                name: fm_name.to_string(),
+                name: Some(fm_name.to_string()),
                 description: desc.map(|s| s.to_string()),
                 license: None,
                 compatibility: None,

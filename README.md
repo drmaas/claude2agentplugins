@@ -50,9 +50,11 @@ All three methods install the `c2ap` executable into Cargo's bin directory, norm
 c2ap convert ./my-claude-plugin -o ./output
 ```
 
+Manifest-less plugins (a directory with `skills/`, a root `SKILL.md`, or auto-discovered components) are detected automatically; a manifest is synthesized from the directory name with a warning.
+
 ### Convert a directory of plugins
 
-Each subdirectory containing `.claude-plugin/plugin.json` is converted.
+Each subdirectory containing `.claude-plugin/plugin.json`, `skills/`, or a root `SKILL.md` is converted.
 
 ```bash
 c2ap convert-dir ./plugins-dir -o ./output
@@ -60,8 +62,27 @@ c2ap convert-dir ./plugins-dir -o ./output
 
 ### Convert a marketplace repo
 
+Accepts a git URL, an `owner/repo` GitHub shorthand, or a local directory path.
+
 ```bash
 c2ap convert-marketplace --repo anthropics/claude-plugins-official -o ./output
+c2ap convert-marketplace --repo ./local-marketplace -o ./output
+```
+
+Both the modern `{name, owner, plugins: [...]}` marketplace format and the legacy bare-array format are supported, including relative-path sources (`"./plugins/x"`), `metadata.pluginRoot`, and `github` / `url` / `git-subdir` / `npm` / `archive` sources.
+
+### Validate an existing Agent Plugins plugin
+
+Check a plugin directory (converted or hand-written) against the Agent Plugins v1.0.0 rules without fetching schemas:
+
+```bash
+c2ap validate ./output
+```
+
+### Scaffold a new Agent Plugins plugin
+
+```bash
+c2ap init my-plugin -o ./plugins --description "Does something useful"
 ```
 
 ## Flags
@@ -71,36 +92,55 @@ c2ap convert-marketplace --repo anthropics/claude-plugins-official -o ./output
 | `-o, --output` | Output directory | `./output` |
 | `--extension-namespace` | Extension namespace for Claude-specific data | `com.claude.code` |
 | `--strict` | Fail on any warning | `false` |
+| `--convert-commands` | Also convert `commands/` (flat Markdown skills) to portable skills | `false` |
+| `--force` | Overwrite non-empty output directories | `false` |
+| `--json` | Emit a machine-readable JSON summary | `false` |
 | `-n, --dry-run` | Show what would be done without writing | `false` |
 | `-v, --verbose` | Verbose output | `false` |
 | `-q, --quiet` | Suppress output except errors | `false` |
 
 ## Conversion Mappings
 
-### Directly mapped
+### Directly mapped (portable)
 
 | Claude Plugin | Agent Plugins |
 |---|---|
 | `.claude-plugin/plugin.json` → | `plugin.json` (with `$schema`) |
-| `skills/` → | `skills/` (validates SKILL.md frontmatter) |
-| `.mcp.json` → | `mcp.json` (adds `type: "stdio"`, transforms env vars) |
+| `skills/` → | `skills/` (validates and normalizes SKILL.md frontmatter, copies `scripts/`, `references/`, `assets/`, and any other skill files) |
+| `.mcp.json` stdio servers → | `mcp.json` (adds `type: "stdio"`, rewrites commands, transforms env vars) |
+| `.mcp.json` http / sse servers → | `mcp.json` streamable-http / sse entries |
+| root `SKILL.md` → | single skill (Claude single-skill plugin layout) |
+| `commands/*.md` (with `--convert-commands`) → | `skills/<name>/SKILL.md` |
 
 ### Moved to extensions
 
-Claude-specific components that have no Agent Plugins equivalent are preserved under `extensions["com.claude.code"]`:
+Claude-specific components that have no Agent Plugins equivalent are preserved under `extensions["com.claude.code"]` as files (in a top-level namespace directory) and/or manifest data:
 
-- `commands/`, `agents/`, `hooks/`, `scripts/`
+- `commands/`, `agents/`, `hooks/`, `scripts/`, `bin/`
 - `themes/`, `monitors/`, `workflows/`, `output-styles/`
-- `.lsp.json`
+- `.lsp.json`, `settings.json`, and the original `.mcp.json`
+- Custom component paths declared in the manifest (`"commands": "./custom/..."`, `"hooks": [...]`, etc.)
 - Manifest fields: `displayName`, `metadata`, `dependencies`, `userConfig`, `channels`, `experimental`
+
+`LICENSE`, `README.md`, and `CHANGELOG.md` are copied to the output root.
 
 ### Environment variable transformation
 
 | Claude | Agent Plugins |
 |---|---|
-| `${CLAUDE_PLUGIN_ROOT}` | `${PLUGIN_ROOT}` |
-| `${CLAUDE_PLUGIN_DATA}` | `${PLUGIN_DATA}` |
+| `${CLAUDE_PLUGIN_ROOT}` in command → | `./`-relative path (Agent Plugins does not expand placeholders in `command`) |
+| `${CLAUDE_PLUGIN_ROOT}` in args/env/cwd → | `${PLUGIN_ROOT}` |
+| `${CLAUDE_PLUGIN_DATA}` → | `${PLUGIN_DATA}` |
 | `${CLAUDE_PROJECT_DIR}` | *(warning — no equivalent)* |
+| `${user_config.*}` | *(warning — no equivalent)* |
+| `env` keys named `PLUGIN_ROOT`/`PLUGIN_DATA` | *(warning — reserved by Agent Plugins)* |
+| `ws` MCP servers | *(warning — no Agent Plugins equivalent; original `.mcp.json` preserved in extensions)* |
+
+### Skill frontmatter normalization
+
+- `name` is normalized to Agent Skills naming rules (lowercase, hyphens; renamed with a warning when needed)
+- `allowed-tools` is written as the Agent Skills space-separated string
+- `metadata` values are stringified (with a warning when a value is not a string)
 
 ## Development
 

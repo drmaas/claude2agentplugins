@@ -23,6 +23,40 @@ pub fn is_valid_extension_namespace(ns: &str) -> bool {
         && !ns.ends_with('.')
 }
 
+pub fn is_valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.contains("--")
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+pub fn normalize_skill_name(name: &str) -> String {
+    let mut result = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while result.contains("--") {
+        result = result.replace("--", "-");
+    }
+    let result = result.trim_matches('-').to_string();
+    if result.is_empty() {
+        "unnamed-skill".to_string()
+    } else {
+        result
+    }
+}
+
 pub fn normalize_name(name: &str) -> String {
     let result = name
         .to_lowercase()
@@ -153,5 +187,31 @@ mod tests {
     #[test]
     fn invalid_namespace_slash() {
         assert!(!is_valid_extension_namespace("../../etc"));
+    }
+
+    #[test]
+    fn valid_skill_names() {
+        assert!(is_valid_skill_name("pdf-processing"));
+        assert!(is_valid_skill_name("data-analysis"));
+        assert!(is_valid_skill_name("a"));
+    }
+
+    #[test]
+    fn invalid_skill_names() {
+        assert!(!is_valid_skill_name("My-Skill"));
+        assert!(!is_valid_skill_name("-leading"));
+        assert!(!is_valid_skill_name("double--hyphen"));
+        assert!(!is_valid_skill_name("has.period"));
+        assert!(!is_valid_skill_name(""));
+        assert!(!is_valid_skill_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn normalize_skill_names() {
+        assert_eq!(normalize_skill_name("My-Skill"), "my-skill");
+        assert_eq!(normalize_skill_name("has.period"), "has-period");
+        assert_eq!(normalize_skill_name("under_score"), "under-score");
+        assert_eq!(normalize_skill_name("---"), "unnamed-skill");
+        assert_eq!(normalize_skill_name("a--b"), "a-b");
     }
 }

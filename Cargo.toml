@@ -5,6 +5,9 @@ edition = "2024"
 description = "Convert Claude Code plugins to Agent Plugins v1.0.0 format"
 license = "MIT"
 repository = "https://github.com/drmaas/claude2agentplugins"
+readme = "README.md"
+keywords = ["claude", "plugins", "agent", "converter"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "c2ap"

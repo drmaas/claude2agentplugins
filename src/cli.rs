@@ -1,14 +1,14 @@
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-use crate::convert::{ConversionReport, ConvertOptions, DirectoryReport};
+use crate::convert::{ConversionReport, ConvertOptions, DirectoryReport, Target};
 use crate::error::Result;
 use crate::validate::name;
 
 #[derive(Parser)]
 #[command(
     name = "c2ap",
-    about = "Convert Claude Code plugins to Agent Plugins v1.0.0"
+    about = "Convert Claude Code plugins to Agent Plugins or Cursor plugins"
 )]
 #[command(version)]
 pub struct Cli {
@@ -46,9 +46,18 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Also convert commands/ to portable skills"
+        help = "Convert commands/ to skills. Cursor skills get disable-model-invocation: true"
     )]
     pub convert_commands: bool,
+
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "agent-plugins",
+        help = "Conversion target (agent-plugins or cursor)"
+    )]
+    pub target: Target,
 
     #[arg(long, global = true, help = "Overwrite non-empty output directories")]
     pub force: bool,
@@ -120,6 +129,7 @@ impl Cli {
             convert_commands: self.convert_commands,
             force: self.force,
             preferred_name: None,
+            target: self.target,
         }
     }
 
@@ -156,7 +166,11 @@ impl Cli {
                 self.print_directory_report(&report);
             }
             Command::Validate { path } => {
-                let (errors, warnings) = crate::validate::plugin::validate_plugin(path);
+                let target = self.validate_target(path);
+                let (errors, warnings) = match target {
+                    Target::Cursor => crate::cursor::validate::validate_plugin(path),
+                    Target::AgentPlugins => crate::validate::plugin::validate_plugin(path),
+                };
                 for w in &warnings {
                     eprintln!("Warning: {}", w);
                 }
@@ -198,7 +212,8 @@ impl Cli {
 
     fn dry_run_print(&self) -> Result<()> {
         println!(
-            "[dry-run] Would convert with extension namespace '{}'",
+            "[dry-run] Would convert with target '{}' and extension namespace '{}'",
+            self.target.as_str(),
             self.extension_namespace
         );
         match &self.command {
@@ -245,6 +260,7 @@ impl Cli {
         if self.json {
             let value = serde_json::json!({
                 "name": report.name,
+                "target": report.target.as_str(),
                 "output": report.output.display().to_string(),
                 "manifestSynthesized": report.manifest_synthesized,
                 "skills": report.skills_converted,
@@ -254,6 +270,21 @@ impl Cli {
                 "warnings": report.warnings,
             });
             println!("{}", serde_json::to_string_pretty(&value).unwrap());
+        } else if !self.quiet && report.target == Target::Cursor {
+            println!(
+                "Converted '{}' to Cursor plugin at {} ({} skills, {} commands, {} mcp servers, {} sidecar entries{})",
+                report.name,
+                report.output.display(),
+                report.skills_converted,
+                report.commands_converted,
+                report.mcp_servers,
+                report.extension_dirs,
+                if report.manifest_synthesized {
+                    ", synthesized manifest"
+                } else {
+                    ""
+                }
+            );
         } else if !self.quiet {
             println!(
                 "Converted '{}' to {} ({} skills, {} mcp servers, {} extensions{}{})",
@@ -292,6 +323,7 @@ impl Cli {
                 "plugins": report.plugins.iter().map(|p| {
                     serde_json::json!({
                         "name": p.name,
+                        "target": p.target.as_str(),
                         "output": p.output.display().to_string(),
                         "skills": p.skills_converted,
                         "commands": p.commands_converted,
@@ -329,6 +361,9 @@ impl Cli {
                 plugin_dir.display()
             )));
         }
+        if self.target == Target::Cursor {
+            return self.init_cursor_plugin(&plugin_dir, name, description);
+        }
         std::fs::create_dir_all(plugin_dir.join("skills").join(name))?;
 
         let manifest = serde_json::json!({
@@ -354,6 +389,43 @@ impl Cli {
 
         if !self.quiet {
             println!("Created Agent Plugins plugin at {}", plugin_dir.display());
+        }
+        Ok(())
+    }
+
+    fn validate_target(&self, path: &Path) -> Target {
+        if self.target == Target::Cursor {
+            return Target::Cursor;
+        }
+        if path.join(".cursor-plugin").join("plugin.json").is_file()
+            && !path.join("plugin.json").is_file()
+        {
+            return Target::Cursor;
+        }
+        Target::AgentPlugins
+    }
+
+    fn init_cursor_plugin(&self, plugin_dir: &Path, name: &str, description: &str) -> Result<()> {
+        std::fs::create_dir_all(plugin_dir.join(".cursor-plugin"))?;
+        std::fs::create_dir_all(plugin_dir.join("skills").join(name))?;
+        let manifest = serde_json::json!({
+            "name": name,
+            "version": "0.1.0",
+            "description": description,
+        });
+        std::fs::write(
+            plugin_dir.join(".cursor-plugin").join("plugin.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )?;
+        let skill_md = format!(
+            "---\nname: {name}\ndescription: {description}\n---\n\nWrite instructions for this skill.\n"
+        );
+        std::fs::write(
+            plugin_dir.join("skills").join(name).join("SKILL.md"),
+            skill_md,
+        )?;
+        if !self.quiet {
+            println!("Created Cursor plugin at {}", plugin_dir.display());
         }
         Ok(())
     }

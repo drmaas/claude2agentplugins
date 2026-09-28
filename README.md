@@ -1,6 +1,6 @@
-# c2ap — Claude Plugin → Agent Plugins Converter
+# c2ap — Claude Plugin Converter
 
-Convert [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugins to [Agent Plugins](https://agent-plugins.org) v1.0.0 format.
+Convert [Claude Code](https://code.claude.com/docs/en/plugins) plugins to [Agent Plugins](https://agent-plugins.org) v1.0.0 or to a [Cursor plugin](https://cursor.com/docs/plugins). The default target is Agent Plugins. Pass `--target cursor` for Cursor's `.cursor-plugin/plugin.json` layout.
 
 ## Installation
 
@@ -89,10 +89,11 @@ c2ap init my-plugin -o ./plugins --description "Does something useful"
 
 | Flag | Description | Default |
 |------|-------------|---------|
+| `--target` | `agent-plugins` (default) or `cursor` | `agent-plugins` |
 | `-o, --output` | Output directory | `./output` |
 | `--extension-namespace` | Extension namespace for Claude-specific data | `com.claude.code` |
 | `--strict` | Fail on any warning | `false` |
-| `--convert-commands` | Also convert `commands/` (flat Markdown skills) to portable skills | `false` |
+| `--convert-commands` | Convert `commands/` to skills. Cursor skills set `disable-model-invocation: true` | `false` |
 | `--force` | Overwrite non-empty output directories | `false` |
 | `--json` | Emit a machine-readable JSON summary | `false` |
 | `-n, --dry-run` | Show what would be done without writing | `false` |
@@ -141,6 +142,75 @@ Claude-specific components that have no Agent Plugins equivalent are preserved u
 - `name` is normalized to Agent Skills naming rules (lowercase, hyphens; renamed with a warning when needed)
 - `allowed-tools` is written as the Agent Skills space-separated string
 - `metadata` values are stringified (with a warning when a value is not a string)
+
+## Cursor target
+
+```bash
+c2ap convert ./my-claude-plugin -o ./output --target cursor
+c2ap convert-dir ./plugins-dir -o ./output --target cursor
+c2ap convert-marketplace --repo anthropics/claude-plugins-official -o ./output --target cursor
+```
+
+`convert` writes one plugin. `convert-dir` and `convert-marketplace` also write `.cursor-plugin/marketplace.json` so the output directory can be imported as a Cursor multi-plugin repository.
+
+Install a converted plugin locally by copying it to `~/.cursor/plugins/local/<name>/` (the folder must contain `.cursor-plugin/plugin.json`), then reload Cursor and confirm the components in Customize. Cursor's documented layout is the [Plugins reference](https://cursor.com/docs/reference/plugins):
+
+```text
+my-plugin/
+├── .cursor-plugin/plugin.json
+├── rules/
+├── skills/<name>/SKILL.md
+├── agents/
+├── commands/
+├── hooks/hooks.json
+├── mcp.json
+├── scripts/
+└── README.md
+```
+
+Validate Cursor output with `c2ap validate ./output` (auto-detected when `.cursor-plugin/plugin.json` is present and a root `plugin.json` is not) or `c2ap validate --target cursor ./output`.
+
+## Cursor conversion mappings
+
+Cursor output follows the current Cursor plugin docs: a `.cursor-plugin/plugin.json` manifest (only `name` is required), folder discovery for skills, rules, agents, commands, hooks, and `mcp.json`, and `${CURSOR_PLUGIN_ROOT}` in MCP config. Skills use the Agent Skills `SKILL.md` shape Cursor documents (`name` matches the parent folder). Rules are `.mdc` files with `description`, `alwaysApply`, and `globs`.
+
+### Directly mapped
+
+| Claude plugin | Cursor plugin |
+|---|---|
+| `.claude-plugin/plugin.json` `name`, `version`, `description`, `author.name`, `author.email`, `homepage`, `repository`, `license`, `keywords` | `.cursor-plugin/plugin.json` |
+| `userConfig` | `variables` JSON Schema. `${user_config.KEY}` becomes `${KEY}`. Set values in the dashboard (Plugins → Configure); they are not written into the plugin |
+| `skills/*/SKILL.md`, custom skill paths, root `SKILL.md` | `skills/<name>/SKILL.md` plus `scripts/`, `references/`, `assets/`, and other skill files. `name` is normalized to match the folder |
+| `.mcp.json` stdio servers | `mcp.json` entries with `command` / `args` / `env` / `cwd`. `${CLAUDE_PLUGIN_ROOT}` becomes `${CURSOR_PLUGIN_ROOT}` |
+| `.mcp.json` `http` / `sse` servers | `mcp.json` entries with `url` and `headers` (Cursor infers transport from the URL) |
+| `agents/*.md` | `agents/<name>.md` with `name`, `description`, and the prompt body |
+| `commands/*.md` | `commands/<name>.md` with `name` and `description` |
+| `commands/*.md` with `--convert-commands` | `skills/<name>/SKILL.md` with `disable-model-invocation: true` (Cursor's explicit slash-command style) and no `commands/` copy |
+| `hooks/hooks.json` events Cursor documents (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`, `PreCompact`) | `hooks/hooks.json` (`version: 1`). Nested Claude groups are flattened. `Bash` → `Shell`, `Edit` → `Write`. `${CLAUDE_PLUGIN_ROOT}/...` becomes `./...` |
+| `rules/`, `.claude/rules/`, manifest `rules`, `CLAUDE.md` | `rules/*.mdc`. Claude `paths` becomes Cursor `globs`. A pathless rule or `CLAUDE.md` is `alwaysApply: true` |
+| `scripts/` | `scripts/` (Cursor's hook and utility script directory) |
+| `bin/` | `bin/` so `${CURSOR_PLUGIN_ROOT}/bin/...` commands keep working |
+| `LICENSE`, `README.md`, `CHANGELOG.md` | same paths at the plugin root |
+
+### Warnings and sidecar
+
+Claude-only data is preserved under `<extension-namespace>/` (default `com.claude.code/`) and called out with a warning. That directory is not a Cursor component, so Cursor ignores it.
+
+| Claude feature | What c2ap does |
+|---|---|
+| `displayName`, `author.url`, manifest `metadata`, `dependencies`, `channels`, `defaultEnabled`, raw `userConfig` | `com.claude.code/manifest-extras.json` |
+| Original `.claude-plugin/plugin.json`, `.mcp.json`, and `hooks/hooks.json` | copied into the sidecar |
+| Agent frontmatter other than `name` and `description` (`model`, `tools`, `effort`, `maxTurns`, …) | dropped from the Cursor agent file; original fields in `component-extras.json` |
+| Command frontmatter other than `name` and `description` (`argument-hint`, `allowed-tools`, …) | dropped from the Cursor command; original fields in `component-extras.json` |
+| Hook events with no Cursor equivalent (`Notification`, `PermissionRequest`, `Setup`, …) | omitted from `hooks/hooks.json`; original file kept in the sidecar |
+| Hook types other than `command` and `prompt` (`http`, `mcp_tool`, `agent`) | omitted; original file kept in the sidecar |
+| `ws` MCP servers, `headersHelper`, servers with no command | omitted from `mcp.json`; original `.mcp.json` kept in the sidecar |
+| `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_PROJECT_DIR}` | left unchanged, with a warning. Cursor expands `${CURSOR_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_ROOT}` in `mcp.json`, and aliases `CLAUDE_PROJECT_DIR` for hooks only |
+| `output-styles/`, `themes/`, `monitors/`, `workflows/`, `.lsp.json`, `settings.json` | copied into the sidecar. LSP, output styles, themes, monitors, and workflows have no Cursor plugin equivalent |
+| `bin/` on `PATH` | files are copied, with a warning that Cursor does not prepend `bin/` to the shell `PATH` |
+| Skill `globs` | written as Cursor `paths` |
+
+Claude Code does not officially ship rules inside plugins. When `rules/`, `.claude/rules/`, a manifest `rules` path, or `CLAUDE.md` is present, c2ap still maps those files because Cursor plugins do load rules.
 
 ## Development
 

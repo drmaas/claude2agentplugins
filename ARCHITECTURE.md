@@ -13,11 +13,23 @@ src/
 │   ├── mcp.rs              # .mcp.json → ClaudeMcpConfig (stdio + remote http/sse/ws servers)
 │   ├── skill.rs            # skills/*/SKILL.md → Skill; root SKILL.md; custom dirs; command files
 │   └── marketplace.rs      # .claude-plugin/marketplace.json → Marketplace (modern object + legacy array)
-├── agent_plugins/          # TARGET format generators
+├── agent_plugins/          # Agent Plugins target generators
 │   ├── manifest.rs         # AgentManifest → plugin.json
 │   ├── mcp.rs              # AgentMcpConfig → mcp.json
 │   └── skill.rs            # AgentSkill → SKILL.md
-├── convert/                # Conversion orchestrator
+├── cursor/                 # Cursor plugin target (`.cursor-plugin/plugin.json`)
+│   ├── convert.rs          # Orchestrator; reuses claude parse/load
+│   ├── manifest.rs         # Cursor manifest + userConfig → variables
+│   ├── mcp.rs              # .mcp.json → mcp.json (`${CURSOR_PLUGIN_ROOT}`)
+│   ├── skills.rs           # skills/*/SKILL.md (name matches folder)
+│   ├── rules.rs            # rules/ and CLAUDE.md → rules/*.mdc
+│   ├── agents.rs           # agents/*.md
+│   ├── commands.rs         # commands/*.md, or skills with --convert-commands
+│   ├── hooks.rs            # hooks/hooks.json event and tool mapping
+│   ├── sidecar.rs          # unmapped Claude data → <namespace>/
+│   ├── validate.rs         # Cursor output checks
+│   └── marketplace_manifest.rs
+├── convert/                # Agent Plugins orchestrator; dispatches --target cursor
 │   ├── mod.rs              # convert_single / convert_directory, ConvertOptions, ConversionReport
 │   ├── manifest.rs         # ClaudeManifest → AgentManifest
 │   ├── mcp.rs              # ClaudeMcpConfig → AgentMcpConfig (command rewrite, remote servers)
@@ -51,6 +63,7 @@ cli.rs (Clap parsing)
 
 convert::convert_single(input, output, options)
     │
+    ├── Target::Cursor → cursor::convert_single (same Claude parsers, Cursor layout)
     ├── Resolve manifest (.claude-plugin/plugin.json) or synthesize from dir name
     ├── Parse skills (skills/, custom paths from manifest, root SKILL.md fallback)
     ├── Parse + convert .mcp.json (stdio rewrite, remote http/sse, ws → warning)

@@ -11,6 +11,24 @@ use crate::claude;
 use crate::claude::manifest::StringOrArray;
 use crate::error::{Error, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Target {
+    #[default]
+    #[value(name = "agent-plugins")]
+    AgentPlugins,
+    #[value(name = "cursor")]
+    Cursor,
+}
+
+impl Target {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Target::AgentPlugins => "agent-plugins",
+            Target::Cursor => "cursor",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
     pub extension_namespace: String,
@@ -20,6 +38,7 @@ pub struct ConvertOptions {
     /// Name used when synthesizing a manifest for manifest-less plugins
     /// (e.g. the marketplace entry name, which is the user-facing identifier).
     pub preferred_name: Option<String>,
+    pub target: Target,
 }
 
 impl Default for ConvertOptions {
@@ -30,6 +49,7 @@ impl Default for ConvertOptions {
             convert_commands: false,
             force: false,
             preferred_name: None,
+            target: Target::AgentPlugins,
         }
     }
 }
@@ -44,6 +64,7 @@ pub struct ConversionReport {
     pub mcp_servers: usize,
     pub extension_dirs: usize,
     pub warnings: Vec<String>,
+    pub target: Target,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +78,10 @@ pub fn convert_single(
     output: &Path,
     options: &ConvertOptions,
 ) -> Result<ConversionReport> {
+    if options.target == Target::Cursor {
+        return crate::cursor::convert_single(input, output, options);
+    }
+
     if output.exists() && !options.force && std::fs::read_dir(output)?.next().is_some() {
         return Err(Error::Conversion(format!(
             "Output directory '{}' is not empty; use --force to overwrite",
@@ -182,6 +207,7 @@ pub fn convert_single(
         mcp_servers,
         extension_dirs: extension_count,
         warnings,
+        target: Target::AgentPlugins,
     })
 }
 
@@ -234,6 +260,9 @@ pub fn convert_directory(
             reason: "No plugins found (no .claude-plugin/plugin.json, skills/, or SKILL.md)"
                 .to_string(),
         });
+    }
+    if options.target == Target::Cursor {
+        crate::cursor::marketplace_manifest::write_from_reports(output, &report)?;
     }
     Ok(report)
 }

@@ -58,6 +58,10 @@ pub fn batch_convert(
         }
     }
 
+    if options.target == crate::convert::Target::Cursor {
+        crate::cursor::marketplace_manifest::write_from_claude(output_dir, &marketplace, &report)?;
+    }
+
     Ok(report)
 }
 

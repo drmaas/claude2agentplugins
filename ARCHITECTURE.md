@@ -13,11 +13,23 @@ src/
 │   ├── mcp.rs              # .mcp.json → ClaudeMcpConfig (stdio + remote http/sse/ws servers)
 │   ├── skill.rs            # skills/*/SKILL.md → Skill; root SKILL.md; custom dirs; command files
 │   └── marketplace.rs      # .claude-plugin/marketplace.json → Marketplace (modern object + legacy array)
-├── agent_plugins/          # TARGET format generators
+├── agent_plugins/          # Agent Plugins target generators
 │   ├── manifest.rs         # AgentManifest → plugin.json
 │   ├── mcp.rs              # AgentMcpConfig → mcp.json
 │   └── skill.rs            # AgentSkill → SKILL.md
-├── convert/                # Conversion orchestrator
+├── cursor/                 # Cursor plugin target (`.cursor-plugin/plugin.json`)
+│   ├── convert.rs          # Orchestrator; reuses claude parse/load
+│   ├── manifest.rs         # Cursor manifest + userConfig → variables
+│   ├── mcp.rs              # .mcp.json → mcp.json (`${CURSOR_PLUGIN_ROOT}`)
+│   ├── skills.rs           # skills/*/SKILL.md (name matches folder)
+│   ├── rules.rs            # rules/ and CLAUDE.md → rules/*.mdc
+│   ├── agents.rs           # agents/*.md
+│   ├── commands.rs         # commands/*.md, or skills with --convert-commands
+│   ├── hooks.rs            # hooks/hooks.json event and tool mapping
+│   ├── sidecar.rs          # unmapped Claude data → <namespace>/
+│   ├── validate.rs         # Cursor output checks
+│   └── marketplace_manifest.rs
+├── convert/                # Agent Plugins orchestrator; dispatches --target cursor
 │   ├── mod.rs              # convert_single / convert_directory, ConvertOptions, ConversionReport
 │   ├── manifest.rs         # ClaudeManifest → AgentManifest
 │   ├── mcp.rs              # ClaudeMcpConfig → AgentMcpConfig (command rewrite, remote servers)
@@ -65,6 +77,7 @@ cli.rs (Clap parsing)
 
 convert::convert_single(input, output, options)
     │
+    ├── Target::Cursor → cursor::convert_single (same Claude parsers, Cursor layout)
     ├── Resolve manifest (.claude-plugin/plugin.json) or synthesize from dir name
     ├── Parse skills (skills/, custom paths from manifest, root SKILL.md fallback)
     ├── Parse + convert .mcp.json (stdio rewrite, remote http/sse, ws → warning)
@@ -87,4 +100,5 @@ convert::convert_single(input, output, options)
 7. **Idempotent output**: Non-empty output directories are refused unless `--force` is given; normalized name collisions in `convert-dir`/`convert-marketplace` are reported as errors.
 8. **Stdio default**: Claude MCP servers are implicit stdio; Agent Plugins requires explicit `type: "stdio"`. Remote `http`/`sse` servers map to `streamable-http`/`sse`; `ws` servers have no equivalent and are warned about.
 9. **Name normalization**: Claude plugin names are auto-normalized (lowercase, hyphens for spaces/underscores), and skill names are normalized to the stricter Agent Skills character set.
-10. **OpenCode v2 is a separate target**: `convert-opencode` does not change the Agent Plugins path. It writes a v2 plugin package (`package.json` with `type: "module"` and `@opencode/plugin`, plus `src/index.ts` that default-exports `Plugin.define`). Skills, commands, agents, and MCP servers are registered in `setup` through `ctx.skill`, `ctx.command`, `ctx.agent`, and `ctx.mcp`. Claude hooks and other unmapped files stay in `extensions/<namespace>/` with warnings.
+10. **OpenCode v2 is a separate target**: `convert-opencode` does not change the Agent Plugins or Cursor paths. It writes a v2 plugin package (`package.json` with `type: "module"` and `@opencode/plugin`, plus `src/index.ts` that default-exports `Plugin.define`). Skills, commands, agents, and MCP servers are registered in `setup` through `ctx.skill`, `ctx.command`, `ctx.agent`, and `ctx.mcp`. Claude hooks and other unmapped files stay in `extensions/<namespace>/` with warnings.
+11. **Cursor is `--target cursor`**: `convert`, `convert-dir`, and `convert-marketplace` write `.cursor-plugin/plugin.json` when that target is set. Cursor conversion is independent of the OpenCode commands.

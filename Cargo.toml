@@ -2,11 +2,11 @@
 name = "c2ap"
 version = "0.1.0"
 edition = "2024"
-description = "Convert Claude Code plugins to Agent Plugins v1.0.0 and OpenCode v2 plugins"
+description = "Convert Claude Code plugins to Agent Plugins v1.0.0, Cursor plugins, or OpenCode v2 plugins"
 license = "MIT"
 repository = "https://github.com/drmaas/claude2agentplugins"
 readme = "README.md"
-keywords = ["claude", "plugins", "agent", "opencode", "converter"]
+keywords = ["claude", "cursor", "opencode", "agent", "converter"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]

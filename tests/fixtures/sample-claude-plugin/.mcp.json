@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "local": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/server",
+      "args": ["--config", "${CLAUDE_PLUGIN_ROOT}/config.json"],
+      "env": {
+        "TOKEN": "${user_config.api_token}"
+      }
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.api_token}"
+      }
+    },
+    "socket": {
+      "type": "ws",
+      "url": "wss://example.com/mcp"
+    }
+  }
+}

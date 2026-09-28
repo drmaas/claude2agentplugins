@@ -1,0 +1,22 @@
+{
+  "name": "sample-plugin",
+  "displayName": "Sample Plugin",
+  "version": "1.2.0",
+  "description": "A representative Claude plugin",
+  "author": {
+    "name": "Ada",
+    "email": "ada@example.com",
+    "url": "https://example.com"
+  },
+  "license": "MIT",
+  "keywords": ["sample"],
+  "userConfig": {
+    "api_token": {
+      "type": "string",
+      "title": "API token",
+      "description": "Token",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}

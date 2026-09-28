@@ -1,7 +1,9 @@
 ---
 name: security-reviewer
 description: Reviews code for vulnerabilities.
-model: sonnet
+model: inherit
+effort: high
+background: true
 tools: Read, Grep
 ---
 

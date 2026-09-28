@@ -1,1 +1,7 @@
-{}
+{
+  "agent": "security-reviewer",
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "./scripts/status.sh"
+  }
+}

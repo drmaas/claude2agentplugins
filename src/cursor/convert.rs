@@ -104,8 +104,15 @@ pub fn convert_single(
         warnings.extend(rule.warnings.clone());
     }
 
-    let converted_hooks = hooks::convert(input, &claude_plugin)?;
-    warnings.extend(converted_hooks.warnings);
+    let settings = crate::claude::settings::load(input, &claude_plugin)?;
+    crate::claude::settings::warn_unmapped(&settings, "Cursor plugin", &mut warnings);
+
+    let mut converted_hooks = hooks::convert(input, &claude_plugin)?;
+    warnings.append(&mut converted_hooks.warnings);
+    let has_bin = input.join("bin").is_dir();
+    if has_bin {
+        inject_bin_path_hook(&mut converted_hooks.config, &mut warnings);
+    }
     if let Some(config) = &converted_hooks.config {
         hooks::write(config, output)?;
     }
@@ -127,7 +134,10 @@ pub fn convert_single(
     };
 
     manifest::write(&built.manifest, output)?;
-    warnings.extend(copy_support_dirs(input, output)?);
+    warnings.extend(copy_support_dirs(input, output, has_bin)?);
+    if has_bin {
+        write_bin_path_script(output)?;
+    }
     copy_root_docs(input, output)?;
 
     let sidecar_files = sidecar::write(
@@ -224,20 +234,100 @@ fn warn_unmapped_files(input: &Path, manifest: &ClaudeManifest, warnings: &mut V
             "monitors/ has no Cursor plugin equivalent; preserved in the sidecar".to_string(),
         );
     }
-    if input.join("settings.json").is_file() {
-        warnings.push("settings.json is Claude-specific; preserved in the sidecar".to_string());
-    }
 }
 
-fn copy_support_dirs(input: &Path, output: &Path) -> Result<Vec<String>> {
+fn inject_bin_path_hook(config: &mut Option<serde_json::Value>, warnings: &mut Vec<String>) {
+    let entry = serde_json::json!({
+        "command": "./scripts/c2ap-prepend-bin-path.py",
+        "matcher": "Shell"
+    });
+    if !matches!(config, Some(serde_json::Value::Object(_))) {
+        *config = Some(serde_json::json!({
+            "version": 1,
+            "hooks": {}
+        }));
+    }
+    let root = config
+        .as_mut()
+        .and_then(|value| value.as_object_mut())
+        .unwrap();
+    root.entry("version".to_string())
+        .or_insert_with(|| serde_json::json!(1));
+    let hooks = root
+        .entry("hooks".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !hooks.is_object() {
+        *hooks = serde_json::json!({});
+    }
+    let hooks = hooks.as_object_mut().unwrap();
+    let list = hooks
+        .entry("preToolUse".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if let Some(array) = list.as_array_mut() {
+        let already = array.iter().any(|item| {
+            item.get("command").and_then(|v| v.as_str())
+                == Some("./scripts/c2ap-prepend-bin-path.py")
+        });
+        if !already {
+            array.insert(0, entry);
+        }
+    }
+    warnings.push(
+        "bin/ PATH approximated with a Cursor preToolUse Shell hook that rewrites commands to prepend the plugin bin/ directory (Cursor has no Bash PATH prepend API)".to_string(),
+    );
+}
+
+fn write_bin_path_script(output: &Path) -> Result<()> {
+    let scripts = output.join("scripts");
+    std::fs::create_dir_all(&scripts)?;
+    let path = scripts.join("c2ap-prepend-bin-path.py");
+    std::fs::write(
+        path,
+        r#"#!/usr/bin/env python3
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
+root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+bin_dir = os.path.join(root, "bin")
+command = payload.get("command")
+if command is None and isinstance(payload.get("tool_input"), dict):
+    command = payload["tool_input"].get("command")
+if not isinstance(command, str) or not command.strip():
+    print(json.dumps({"permission": "allow"}))
+    raise SystemExit(0)
+marker = bin_dir + os.pathsep
+if command.startswith(f"PATH={bin_dir!r}:") or f"PATH='{bin_dir}:" in command or marker in command:
+    print(json.dumps({"permission": "allow"}))
+    raise SystemExit(0)
+quoted = bin_dir.replace("'", "'\"'\"'")
+rewritten = f"PATH='{quoted}:'$PATH {command}"
+print(json.dumps({
+    "permission": "allow",
+    "updated_input": {"command": rewritten},
+}))
+"#,
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(scripts.join("c2ap-prepend-bin-path.py"))?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(scripts.join("c2ap-prepend-bin-path.py"), perms)?;
+    }
+    Ok(())
+}
+
+fn copy_support_dirs(input: &Path, output: &Path, has_bin: bool) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
     if input.join("scripts").exists() {
         crate::convert::extensions::copy_entry(&input.join("scripts"), &output.join("scripts"))?;
     }
-    if input.join("bin").exists() {
+    if has_bin {
         crate::convert::extensions::copy_entry(&input.join("bin"), &output.join("bin"))?;
         warnings.push(
-            "bin/ copied to the plugin root so ${CURSOR_PLUGIN_ROOT}/bin commands keep working; Cursor does not add bin/ to PATH the way Claude Code does"
+            "bin/ copied to the plugin root so ${CURSOR_PLUGIN_ROOT}/bin commands and the PATH approximation hook keep working"
                 .to_string(),
         );
     }

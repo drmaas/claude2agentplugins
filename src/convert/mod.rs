@@ -116,6 +116,9 @@ pub fn convert_single(
         ));
     }
 
+    let settings = claude::settings::load(input, &claude_plugin)?;
+    claude::settings::warn_unmapped(&settings, "Agent Plugins", &mut warnings);
+
     let mut extra_skill_dirs: Vec<PathBuf> = Vec::new();
     let mut direct_skill_roots: Vec<PathBuf> = Vec::new();
     if let Some(skills) = &claude_plugin.skills {
@@ -184,6 +187,12 @@ pub fn convert_single(
         extensions::collect(input, &claude_plugin, &options.extension_namespace);
     let extension_count = extension_entries.len();
     extensions::write(&extension_entries, output)?;
+    if input.join("bin").is_dir() {
+        warnings.push(format!(
+            "bin/ has no Agent Plugins PATH API; preserved under {}/bin (Claude prepends bin/ to the Bash tool PATH)",
+            options.extension_namespace
+        ));
+    }
 
     copy_root_docs(input, output)?;
 

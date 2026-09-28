@@ -2,7 +2,8 @@
 name: reviewer
 description: Reviews changes
 tools: Read, Bash
-model: sonnet
+model: anthropic/claude-sonnet-4-5
+effort: high
 color: "#336699"
 maxTurns: 4
 ---

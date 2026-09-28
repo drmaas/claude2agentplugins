@@ -89,6 +89,8 @@ pub struct ClaudeManifest {
     #[serde(rename = "defaultEnabled")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ClaudeManifest {
@@ -117,6 +119,7 @@ impl ClaudeManifest {
             channels: None,
             workflows: None,
             default_enabled: None,
+            settings: None,
         }
     }
 }

@@ -53,6 +53,10 @@ fn converts_fixture_to_cursor_plugin() {
     let agent = std::fs::read_to_string(output.join("agents/security-reviewer.md")).unwrap();
     assert!(agent.contains("name: security-reviewer"));
     assert!(agent.contains("Be careful."));
+    assert!(agent.contains("model: inherit[effort=high]"));
+    assert!(agent.contains("is_background: true"));
+    assert!(agent.contains("readonly: true"));
+    assert!(!agent.contains("tools:"));
     assert!(!agent.contains("sonnet"));
 
     let rule = std::fs::read_to_string(output.join("rules/prefer-const.mdc")).unwrap();
@@ -68,12 +72,17 @@ fn converts_fixture_to_cursor_plugin() {
             .unwrap();
     assert_eq!(
         hooks["hooks"]["preToolUse"][0]["command"],
+        "./scripts/c2ap-prepend-bin-path.py"
+    );
+    assert_eq!(hooks["hooks"]["preToolUse"][0]["matcher"], "Shell");
+    assert_eq!(
+        hooks["hooks"]["preToolUse"][1]["command"],
         "./scripts/check.sh"
     );
-    assert_eq!(hooks["hooks"]["preToolUse"][0]["matcher"], "Shell|Write");
+    assert_eq!(hooks["hooks"]["preToolUse"][1]["matcher"], "Shell|Write");
     assert!(hooks["hooks"].get("Notification").is_none());
     assert!(hooks["hooks"].get("beforeShellExecution").is_none());
-    assert!(!agent.contains("tools:"));
+    assert!(output.join("scripts/c2ap-prepend-bin-path.py").is_file());
 
     let mcp: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(output.join("mcp.json")).unwrap()).unwrap();
@@ -110,14 +119,18 @@ fn converts_fixture_to_cursor_plugin() {
         "author.url",
         "ws",
         "Notification",
-        "model",
         "argument-hint",
         "dashboard",
         "no official rules",
         "bin/",
+        "PATH",
         ".lsp.json",
         "settings.json",
+        "subagentStatusLine",
+        "agent",
         "output-styles",
+        "is_background",
+        "readonly",
     ] {
         assert!(
             warning_text.contains(needle),

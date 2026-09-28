@@ -83,7 +83,7 @@ pub fn write(
         (
             "settings.json",
             "settings",
-            "settings.json has no OpenCode v2 equivalent",
+            "settings.json keys other than a mapped agent default remain Claude-specific",
         ),
         (
             ".mcp.json",

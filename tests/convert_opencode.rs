@@ -59,11 +59,17 @@ fn converts_claude_plugin_to_opencode_v2_package() {
     assert!(source.contains("id: \"review\""));
     assert!(source.contains("ctx.agent.transform"));
     assert!(source.contains("editor.update(\"reviewer\""));
-    assert!(source.contains("agent.mode = \"subagent\""));
+    assert!(source.contains("agent.mode = \"primary\""));
+    assert!(source.contains("editor.default(\"reviewer\")"));
     assert!(source.contains("agent.system = \"You review the diff.\""));
+    assert!(source.contains("providerID: \"anthropic\""));
+    assert!(source.contains("id: \"claude-sonnet-4-5\""));
+    assert!(source.contains("variant: \"high\""));
     assert!(source.contains("effect: \"allow\""));
     assert!(source.contains("ctx.shell.hook"));
     assert!(source.contains("create.before"));
+    assert!(source.contains("path.join(root, \"bin\")"));
+    assert!(source.contains("event.env.PATH"));
     assert!(source.contains("ctx.permission.hook"));
     assert!(source.contains("runClaudeHook"));
     assert!(source.contains("echo blocked"));
@@ -81,6 +87,7 @@ fn converts_claude_plugin_to_opencode_v2_package() {
     assert!(!source.contains("wss://example.com/mcp"));
     assert!(!output.join("opencode.json").exists());
     assert!(!output.join("plugin.json").exists());
+    assert!(output.join("bin/helper").is_file());
 
     let skill = std::fs::read_to_string(output.join("skills/review/SKILL.md")).unwrap();
     assert!(skill.contains("name: review"));
@@ -90,6 +97,18 @@ fn converts_claude_plugin_to_opencode_v2_package() {
         output
             .join("extensions/com.claude.code/hooks/hooks.json")
             .is_file()
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("editor.default") || warning.contains("settings.agent"))
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("bin/") && warning.contains("PATH"))
     );
 
     let (errors, warnings) = validate(&output);

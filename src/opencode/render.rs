@@ -42,17 +42,25 @@ pub fn write_package(
     Ok(())
 }
 
-pub fn write_plugin(
-    output: &Path,
-    plugin_id: &str,
-    skills: &[RegisteredSkill],
-    agents: &[RegisteredAgent],
-    commands: &[RegisteredCommand],
-    servers: &std::collections::BTreeMap<String, OpenCodeMcpServer>,
-    hooks: &[MappedHook],
-) -> Result<()> {
+pub struct PluginParts<'a> {
+    pub skills: &'a [RegisteredSkill],
+    pub agents: &'a [RegisteredAgent],
+    pub commands: &'a [RegisteredCommand],
+    pub servers: &'a std::collections::BTreeMap<String, OpenCodeMcpServer>,
+    pub hooks: &'a [MappedHook],
+    pub prepend_bin_path: bool,
+}
+
+pub fn write_plugin(output: &Path, plugin_id: &str, parts: &PluginParts<'_>) -> Result<()> {
+    let skills = parts.skills;
+    let agents = parts.agents;
+    let commands = parts.commands;
+    let servers = parts.servers;
+    let hooks = parts.hooks;
+    let prepend_bin_path = parts.prepend_bin_path;
     let needs_root = !skills.is_empty()
         || !hooks.is_empty()
+        || prepend_bin_path
         || servers.values().any(|server| match server {
             OpenCodeMcpServer::Local {
                 command,
@@ -83,6 +91,21 @@ pub fn write_plugin(
     source.push_str("export default Plugin.define({\n");
     source.push_str(&format!("  id: {},\n", js_string(plugin_id)));
     source.push_str("  async setup(ctx) {\n");
+    if prepend_bin_path {
+        source.push_str(
+            "    // Approximate Claude bin/ Bash PATH by prepending package bin/ for shell creates\n",
+        );
+        source.push_str("    await ctx.shell.hook(\"create.before\", (event) => {\n");
+        source.push_str("      const binDir = path.join(root, \"bin\")\n");
+        source.push_str("      const current = event.env.PATH ?? process.env.PATH ?? \"\"\n");
+        source.push_str("      const parts = current.split(path.delimiter).filter(Boolean)\n");
+        source.push_str("      if (!parts.includes(binDir)) {\n");
+        source.push_str(
+            "        event.env.PATH = parts.length ? `${binDir}${path.delimiter}${current}` : binDir\n",
+        );
+        source.push_str("      }\n");
+        source.push_str("    })\n");
+    }
     if !skills.is_empty() {
         source.push_str("    await ctx.skill.transform((editor) => {\n");
         for skill in skills {
@@ -116,7 +139,10 @@ pub fn write_plugin(
                 "        agent.description = {}\n",
                 js_string(&agent.description)
             ));
-            source.push_str(&format!("        agent.mode = {}\n", js_string(agent.mode)));
+            source.push_str(&format!(
+                "        agent.mode = {}\n",
+                js_string(&agent.mode)
+            ));
             source.push_str("        agent.hidden = false\n");
             source.push_str(&format!(
                 "        agent.system = {}\n",
@@ -132,14 +158,29 @@ pub fn write_plugin(
             if let Some(steps) = agent.steps {
                 source.push_str(&format!("        agent.steps = {steps}\n"));
             }
-            if let Some((provider, id)) = &agent.model {
-                source.push_str(&format!(
-                    "        agent.model = {{ providerID: {}, id: {} }}\n",
-                    js_string(provider),
-                    js_string(id)
-                ));
+            if let Some((provider, id, variant)) = &agent.model {
+                if let Some(variant) = variant {
+                    source.push_str(&format!(
+                        "        agent.model = {{ providerID: {}, id: {}, variant: {} }}\n",
+                        js_string(provider),
+                        js_string(id),
+                        js_string(variant)
+                    ));
+                } else {
+                    source.push_str(&format!(
+                        "        agent.model = {{ providerID: {}, id: {} }}\n",
+                        js_string(provider),
+                        js_string(id)
+                    ));
+                }
             }
             source.push_str("      })\n");
+        }
+        if let Some(default) = agents.iter().find(|agent| agent.is_default) {
+            source.push_str(&format!(
+                "      editor.default({})\n",
+                js_string(&default.id)
+            ));
         }
         source.push_str("    })\n");
     }

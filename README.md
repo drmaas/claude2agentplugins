@@ -132,13 +132,14 @@ The package follows the [v2 plugin guide](https://opencode.ai/v2/docs/build/plug
 | Plugin package | `package.json` (`type: "module"`, `exports["."]`, dependency `@opencode/plugin`) and `src/index.ts` |
 | `skills/*/SKILL.md`, root `SKILL.md` | `ctx.skill.transform` → `editor.add({ id, name, description, location, content })`. The skill file is also written at `skills/<name>/SKILL.md` and `location` points at it |
 | `commands/*.md` | `ctx.command.transform` → `editor.add({ name, description, execute })`. `execute` calls `ctx.session.prompt` with the command body. `$ARGUMENTS` is replaced with `prompt.text` |
-| `agents/*.md` | `ctx.agent.transform` → `editor.update(id, ...)`. Sets `description`, `mode: "subagent"`, `system` (the prompt), `permissions`, and `color` / `steps` when they match [Agent.Info](https://opencode.ai/v2/docs/build/plugins/). v2 has no `editor.add` for agents; `update` supplies the fields on that id |
+| `agents/*.md` | `ctx.agent.transform` → `editor.update(id, ...)`. Sets `description`, `mode` (`subagent`, or `primary` when selected by `settings.agent`), `system`, `permissions` (from `tools`), `color`, `steps` (from `maxTurns`), and `model` / `model.variant` (from `effort`) when they match [Agent.Info](https://opencode.ai/v2/docs/build/plugins/). `settings.agent` also calls `editor.default(id)`. v2 has no `editor.add` for agents |
 | `hooks/hooks.json` command hooks when a faithful mapping exists | Registered in `setup` via OpenCode v2 hook APIs (see table below). Commands run through `child_process.spawnSync` with a best-effort Claude-compatible stdin JSON payload. `${CLAUDE_PLUGIN_ROOT}` becomes the package root at runtime; `scripts/` is copied when referenced |
+| `bin/` | Copied to package `bin/` and prepended to shell `PATH` via `ctx.shell.hook("create.before")` (`event.env.PATH`) |
 | `.mcp.json` stdio | `ctx.mcp.transform` → `editor.set(name, { type: "local", command, environment, cwd })`. `command` is a string array. `${CLAUDE_PLUGIN_ROOT}` becomes `path.join(root, ...)` inside the package |
 | `.mcp.json` `http` and `sse` | `editor.set(name, { type: "remote", url, headers })`. SSE is warned because v2 has one remote transport |
 | `README.md`, `LICENSE`, `CHANGELOG.md` | Copied to the package root |
 
-OpenCode v2 agent permissions are `{ action, resource, effect }` rules. A Claude `tools` allowlist becomes a deny-all rule followed by `allow` rules for the mapped actions (`read`, `edit`, `bash`, and the other built-in tool names). An omitted tools list becomes `{ action: "*", resource: "*", effect: "allow" }`.
+OpenCode v2 agent permissions are `{ action, resource, effect }` rules. A Claude `tools` allowlist becomes a deny-all rule followed by `allow` rules for the mapped actions (`read`, `edit`, `bash`, and the other built-in tool names). An omitted tools list becomes `{ action: "*", resource: "*", effect: "allow" }`. Claude model aliases (`sonnet`, `opus`, …) and fields without Agent.Info equivalents (`permissionMode`, skill preload, per-agent hooks) stay warned and omitted from the registration.
 
 ### Hook mapping (OpenCode v2)
 
@@ -159,9 +160,10 @@ OpenCode v2 agent permissions are `{ action, resource, effect }` rules. A Claude
 Claude data that v2 plugins do not load is copied to `extensions/<namespace>/` (default `extensions/com.claude.code/`) and reported as a warning:
 
 - Original `hooks/` (always kept, including when command hooks were also mapped onto `ctx.*.hook`)
-- `workflows/`, `monitors/`, `output-styles/`, `themes/`, `evals/`, `bin/`
+- `workflows/`, `monitors/`, `output-styles/`, `themes/`, `evals/`
+- `bin/` also remains under extensions when present (the package-root copy is for PATH)
 - `scripts/` when not copied to the package root for mapped hooks
-- `.lsp.json`, `settings.json`, and the original `.mcp.json`
+- `.lsp.json`, `settings.json` (including `subagentStatusLine`), and the original `.mcp.json`
 - Manifest `userConfig`, `dependencies`, `channels`, and `defaultEnabled`
 
 `--convert-commands` applies to Agent Plugins and Cursor. OpenCode conversion always registers `commands/` through `ctx.command.transform` and ignores this flag.
@@ -183,11 +185,11 @@ Claude data that v2 plugins do not load is copied to `extensions/<namespace>/` (
 
 Claude-specific components that have no Agent Plugins equivalent are preserved under `extensions["com.claude.code"]` as files (in a top-level namespace directory) and/or manifest data:
 
-- `commands/`, `agents/`, `hooks/`, `scripts/`, `bin/`
+- `commands/`, `agents/`, `hooks/`, `scripts/`, `bin/` (no PATH prepend API)
 - `themes/`, `monitors/`, `workflows/`, `output-styles/`
-- `.lsp.json`, `settings.json`, and the original `.mcp.json`
+- `.lsp.json`, `settings.json` (`agent`, `subagentStatusLine`), and the original `.mcp.json`
 - Custom component paths declared in the manifest (`"commands": "./custom/..."`, `"hooks": [...]`, etc.)
-- Manifest fields: `displayName`, `metadata`, `dependencies`, `userConfig`, `channels`, `experimental`
+- Manifest fields: `displayName`, `metadata`, `dependencies`, `userConfig`, `channels`, `experimental`, `settings`
 
 `LICENSE`, `README.md`, and `CHANGELOG.md` are copied to the output root.
 
@@ -249,13 +251,13 @@ Cursor output follows the current Cursor plugin docs: a `.cursor-plugin/plugin.j
 | `skills/*/SKILL.md`, custom skill paths, root `SKILL.md` | `skills/<name>/SKILL.md` plus `scripts/`, `references/`, `assets/`, and other skill files. `name` is normalized to match the folder |
 | `.mcp.json` stdio servers | `mcp.json` entries with `command` / `args` / `env` / `cwd`. `${CLAUDE_PLUGIN_ROOT}` becomes `${CURSOR_PLUGIN_ROOT}` |
 | `.mcp.json` `http` / `sse` servers | `mcp.json` entries with `url` and `headers` (Cursor infers transport from the URL) |
-| `agents/*.md` | `agents/<name>.md` with `name`, `description`, and the prompt body |
+| `agents/*.md` | `agents/<name>.md` with Cursor [subagent](https://cursor.com/docs/subagents) fields: `name`, `description`, `model` (`inherit` or non-alias ids; Claude aliases like `sonnet` stay in the sidecar), `readonly` (when Claude `tools` is read-only), `is_background` (from Claude `background`). Claude `effort` becomes `[effort=…]` on a mapped model |
 | `commands/*.md` | `commands/<name>.md` with `name` and `description` |
 | `commands/*.md` with `--convert-commands` | `skills/<name>/SKILL.md` with `disable-model-invocation: true` (Cursor's explicit slash-command style) and no `commands/` copy |
 | `hooks/hooks.json` events Cursor documents (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`, `PreCompact`) | `hooks/hooks.json` (`version: 1`). Nested Claude groups are flattened. `Bash` → `Shell`, `Edit` → `Write`. Bash-only `PreToolUse` / `PostToolUse` specialize to `beforeShellExecution` / `afterShellExecution`. `${CLAUDE_PLUGIN_ROOT}/...` becomes `./...` |
 | `rules/`, `.claude/rules/`, manifest `rules`, `CLAUDE.md` | `rules/*.mdc`. Claude `paths` becomes Cursor `globs`. A pathless rule or `CLAUDE.md` is `alwaysApply: true` |
 | `scripts/` | `scripts/` (Cursor's hook and utility script directory) |
-| `bin/` | `bin/` so `${CURSOR_PLUGIN_ROOT}/bin/...` commands keep working |
+| `bin/` | `bin/` plus a generated `preToolUse` Shell hook (`scripts/c2ap-prepend-bin-path.py`) that rewrites commands to prepend the plugin `bin/` onto `PATH` |
 | `LICENSE`, `README.md`, `CHANGELOG.md` | same paths at the plugin root |
 
 ### Warnings and sidecar
@@ -266,17 +268,38 @@ Claude-only data is preserved under `<extension-namespace>/` (default `com.claud
 |---|---|
 | `displayName`, `author.url`, manifest `metadata`, `dependencies`, `channels`, `defaultEnabled`, raw `userConfig` | `com.claude.code/manifest-extras.json` |
 | Original `.claude-plugin/plugin.json`, `.mcp.json`, and `hooks/hooks.json` | copied into the sidecar |
-| Agent frontmatter other than `name` and `description` (`model`, `tools`, `effort`, `maxTurns`, …) | dropped from the Cursor agent file; original fields in `component-extras.json` |
+| Unmapped agent frontmatter (`maxTurns`, `permissionMode`, skill preload, per-agent hooks, Claude model aliases, …) | dropped from the Cursor agent file; original fields in `component-extras.json` |
 | Command frontmatter other than `name` and `description` (`argument-hint`, `allowed-tools`, …) | dropped from the Cursor command; original fields in `component-extras.json` |
 | Hook events with no Cursor equivalent (`Notification`, `PermissionRequest`, `Setup`, …) | omitted from `hooks/hooks.json`; original file kept in the sidecar |
 | Hook types other than `command` and `prompt` (`http`, `mcp_tool`, `agent`) | omitted; original file kept in the sidecar |
 | `ws` MCP servers, `headersHelper`, servers with no command | omitted from `mcp.json`; original `.mcp.json` kept in the sidecar |
 | `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_PROJECT_DIR}` | left unchanged, with a warning. Cursor expands `${CURSOR_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_ROOT}` in `mcp.json`, and aliases `CLAUDE_PROJECT_DIR` for hooks only |
-| `output-styles/`, `themes/`, `monitors/`, `workflows/`, `.lsp.json`, `settings.json` | copied into the sidecar. LSP, output styles, themes, monitors, and workflows have no Cursor plugin equivalent |
-| `bin/` on `PATH` | files are copied, with a warning that Cursor does not prepend `bin/` to the shell `PATH` |
+| `output-styles/`, `themes/`, `monitors/`, `workflows/`, `.lsp.json`, `settings.json` (`agent`, `subagentStatusLine`) | copied into the sidecar. Cursor plugins have no settings/`agent` default or status-line API |
 | Skill `globs` | written as Cursor `paths` |
 
 Claude Code does not officially ship rules inside plugins. When `rules/`, `.claude/rules/`, a manifest `rules` path, or `CLAUDE.md` is present, c2ap still maps those files because Cursor plugins do load rules.
+
+## Remaining Claude→host inventory (issue #7)
+
+Per-target status for the surfaces explored after first-class hooks/agents. **Mapped** means a documented host API; **sidecar** means preserved with an explicit warning; **blocked** means no faithful host API (also sidecar + warning).
+
+| Claude surface | Agent Plugins | Cursor | OpenCode v2 |
+|---|---|---|---|
+| Agent `model` | sidecar (no agents in v1 portable core) | mapped when `inherit` or a non-Claude-alias id; Claude aliases (`sonnet`/`opus`/…) → sidecar | mapped when `provider/model` (optional `#variant`); aliases → omitted + warn |
+| Agent `effort` | sidecar | mapped onto Cursor `[effort=…]` when a Cursor model is mapped | mapped to `Agent.Info.model.variant` when a provider/model is present |
+| Agent `tools` / `disallowedTools` | sidecar | read-only allowlists → `readonly: true`; otherwise sidecar | mapped to permission rules |
+| Agent `maxTurns` | sidecar | sidecar | mapped to `steps` |
+| Agent `background` | sidecar | mapped to `is_background` | sidecar (no Agent.Info field) |
+| Agent `permissionMode`, skill preload, per-agent `hooks`, `memory`, `isolation`, `mcpServers` | sidecar | sidecar | sidecar |
+| Agent `color` | sidecar | sidecar | mapped when hex/theme color |
+| Hook type `command` | sidecar | mapped | mapped when the event has a host hook |
+| Hook type `prompt` | sidecar | mapped (Cursor prompt hooks) | sidecar (TS callbacks only; not Claude prompt-hook semantics) |
+| Hook types `http`, `mcp_tool`, `agent` | sidecar | sidecar | sidecar |
+| `Notification`, `Setup` | sidecar | sidecar | sidecar |
+| `SessionStart` / `SessionEnd` / `Stop` / `SubagentStart` / `SubagentStop` | sidecar | mapped | sidecar (no session lifecycle hooks beyond `prompt` / `compaction` / request hooks) |
+| `settings.json` / manifest `settings.agent` | sidecar | sidecar | mapped to `editor.default(id)` + `mode: "primary"` |
+| `settings.json` `subagentStatusLine` | sidecar | sidecar | sidecar |
+| `bin/` on Bash `PATH` | sidecar (no PATH API) | approximated via `preToolUse` Shell `updated_input` PATH rewrite + `bin/` copy | approximated via `ctx.shell.hook("create.before")` `event.env.PATH` + `bin/` copy |
 
 ## Development
 

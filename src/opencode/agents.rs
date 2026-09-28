@@ -14,11 +14,12 @@ pub struct RegisteredAgent {
     pub id: String,
     pub description: String,
     pub system: String,
-    pub mode: &'static str,
+    pub mode: String,
     pub permissions: Vec<PermissionRule>,
     pub color: Option<String>,
     pub steps: Option<u64>,
-    pub model: Option<(String, String)>,
+    pub model: Option<(String, String, Option<String>)>,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,7 @@ const HANDLED_EXTRA: &[&str] = &[
     "skills",
     "hooks",
     "allowedTools",
+    "effort",
 ];
 
 const BUILTIN_AGENTS: &[&str] = &[
@@ -55,10 +57,12 @@ const BUILTIN_AGENTS: &[&str] = &[
 pub fn convert(
     plugin_root: &Path,
     manifest: &ClaudeManifest,
+    default_agent: Option<&str>,
 ) -> Result<(Vec<RegisteredAgent>, Vec<String>)> {
     let mut warnings = Vec::new();
     let mut agents = Vec::new();
     let mut seen = HashSet::new();
+    let default_id = default_agent.map(fit_name);
 
     for path in agent_files(plugin_root, manifest, &mut warnings) {
         let markdown = read_markdown(&path)?;
@@ -124,11 +128,30 @@ pub fn convert(
             }
         }
 
-        let model = frontmatter.and_then(|item| {
+        let effort = frontmatter.and_then(|item| extra_string(item, &["effort"]));
+        let mut model = frontmatter.and_then(|item| {
             extra_string(item, &["model"])
                 .and_then(|model| map_model(&model, &format!("Agent '{id}'"), &mut warnings))
                 .and_then(|model| split_model(&model))
         });
+        if let Some(effort) = effort.as_deref() {
+            if let Some((_, _, variant)) = model.as_mut() {
+                if variant.is_none() {
+                    *variant = Some(effort.to_string());
+                    warnings.push(format!(
+                        "Agent '{id}': Claude effort '{effort}' mapped to OpenCode Agent.Info model.variant"
+                    ));
+                } else {
+                    warnings.push(format!(
+                        "Agent '{id}': Claude effort '{effort}' ignored because the model already sets a variant"
+                    ));
+                }
+            } else {
+                warnings.push(format!(
+                    "Agent '{id}': Claude effort '{effort}' requires a provider/model id to map onto Agent.Info.model.variant; omitted"
+                ));
+            }
+        }
 
         let steps = frontmatter.and_then(|item| steps_from(item, &id, &mut warnings));
         let color = frontmatter.and_then(|item| color_from(item, &id, &mut warnings));
@@ -138,16 +161,35 @@ pub fn convert(
             warnings.push(format!("Agent '{id}': prompt body is empty"));
         }
 
+        let is_default = default_id.as_ref() == Some(&id);
+        let mode = if is_default {
+            warnings.push(format!(
+                "Agent '{id}': settings.agent selects this agent as the OpenCode default via editor.default; mode set to primary"
+            ));
+            "primary".to_string()
+        } else {
+            "subagent".to_string()
+        };
+
         agents.push(RegisteredAgent {
             id,
             description,
             system,
-            mode: "subagent",
+            mode,
             permissions,
             color,
             steps,
             model,
+            is_default,
         });
+    }
+
+    if let Some(default_id) = default_id
+        && !agents.iter().any(|agent| agent.id == default_id)
+    {
+        warnings.push(format!(
+            "settings.agent '{default_id}' does not match a converted agent id; editor.default was not set"
+        ));
     }
 
     Ok((agents, warnings))
@@ -330,12 +372,19 @@ fn allow_all() -> Vec<PermissionRule> {
     }]
 }
 
-fn split_model(model: &str) -> Option<(String, String)> {
-    let (provider, id) = model.split_once('/')?;
-    if provider.is_empty() || id.is_empty() {
+fn split_model(model: &str) -> Option<(String, String, Option<String>)> {
+    let (provider, rest) = model.split_once('/')?;
+    if provider.is_empty() || rest.is_empty() {
+        return None;
+    }
+    let (id, variant) = match rest.split_once('#') {
+        Some((id, variant)) if !id.is_empty() => (id, Some(variant.to_string())),
+        _ => (rest, None),
+    };
+    if id.is_empty() {
         None
     } else {
-        Some((provider.to_string(), id.to_string()))
+        Some((provider.to_string(), id.to_string(), variant))
     }
 }
 

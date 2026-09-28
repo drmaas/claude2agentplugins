@@ -94,6 +94,12 @@ pub fn convert(claude: &ClaudeManifest, extension_namespace: &str) -> AgentManif
             serde_json::Value::Bool(default_enabled),
         );
     }
+    if let Some(ref settings) = claude.settings {
+        ext_data.insert(
+            "settings".to_string(),
+            serde_json::to_value(settings).unwrap(),
+        );
+    }
 
     if !ext_data.is_empty() {
         extensions.insert(
@@ -184,6 +190,7 @@ mod tests {
             channels: None,
             workflows: None,
             default_enabled: None,
+            settings: None,
         };
 
         let agent = convert(&claude, "com.claude.code");
@@ -218,6 +225,7 @@ mod tests {
             channels: None,
             workflows: None,
             default_enabled: None,
+            settings: None,
         };
 
         let agent = convert(&claude, "com.claude.code");
@@ -252,6 +260,7 @@ mod tests {
             channels: None,
             workflows: None,
             default_enabled: None,
+            settings: None,
         };
 
         let agent = convert(&claude, "com.claude.code");
@@ -284,6 +293,7 @@ mod tests {
             channels: None,
             workflows: None,
             default_enabled: None,
+            settings: None,
         };
 
         let agent = convert(&claude, "com.claude.code");
@@ -318,6 +328,7 @@ mod tests {
             channels: None,
             workflows: None,
             default_enabled: None,
+            settings: None,
         };
 
         let agent = convert(&claude, "com.claude.code");

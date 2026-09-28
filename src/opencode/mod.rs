@@ -100,12 +100,35 @@ pub fn convert_single(
     let package_name = package_name(&plugin_id);
     let version = package_version(manifest.version.as_deref(), &plugin_id, &mut warnings);
 
+    let settings = crate::claude::settings::load(input, &manifest)?;
+    let default_agent = settings.agent.as_deref();
+    if settings.subagent_status_line.is_some() {
+        let source = if settings.from_file {
+            "settings.json"
+        } else {
+            "plugin.json settings"
+        };
+        warnings.push(format!(
+            "{source} key 'subagentStatusLine' has no OpenCode v2 equivalent; preserved under extensions/"
+        ));
+    }
+    for key in &settings.unknown_keys {
+        let source = if settings.from_file {
+            "settings.json"
+        } else {
+            "plugin.json settings"
+        };
+        warnings.push(format!(
+            "{source} key '{key}' is ignored by Claude Code and has no OpenCode v2 equivalent; preserved under extensions/"
+        ));
+    }
+
     let (claude_skills, skill_path_warnings) = load_skills(input, &manifest, &plugin_id)?;
     warnings.extend(skill_path_warnings);
     let (registered_skills, skill_warnings) = skills::convert(input, output, &claude_skills)?;
     warnings.extend(skill_warnings);
 
-    let (agents, agent_warnings) = agents::convert(input, &manifest)?;
+    let (agents, agent_warnings) = agents::convert(input, &manifest, default_agent)?;
     warnings.extend(agent_warnings);
     let (commands, command_warnings) = commands::convert(input, &manifest)?;
     warnings.extend(command_warnings);
@@ -132,6 +155,14 @@ pub fn convert_single(
         &converted_mcp.referenced_roots,
         &mut warnings,
     )?;
+    let has_bin = input.join("bin").is_dir();
+    if has_bin {
+        crate::convert::extensions::copy_entry(&input.join("bin"), &output.join("bin"))?;
+        warnings.push(
+            "bin/ copied into the OpenCode package and prepended to shell PATH via ctx.shell.hook(\"create.before\") (Claude Bash PATH approximation)"
+                .to_string(),
+        );
+    }
     if (converted_hooks.needs_scripts || !converted_hooks.mapped.is_empty())
         && hooks::copy_scripts(input, output)?
     {
@@ -145,11 +176,14 @@ pub fn convert_single(
     render::write_plugin(
         output,
         &plugin_id,
-        &registered_skills,
-        &agents,
-        &commands,
-        &converted_mcp.servers,
-        &converted_hooks.mapped,
+        &render::PluginParts {
+            skills: &registered_skills,
+            agents: &agents,
+            commands: &commands,
+            servers: &converted_mcp.servers,
+            hooks: &converted_hooks.mapped,
+            prepend_bin_path: has_bin,
+        },
     )?;
 
     let sidecar = sidecar::write(

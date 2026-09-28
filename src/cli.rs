@@ -8,7 +8,7 @@ use crate::validate::name;
 #[derive(Parser)]
 #[command(
     name = "c2ap",
-    about = "Convert Claude Code plugins to Agent Plugins v1.0.0"
+    about = "Convert Claude Code plugins to Agent Plugins v1.0.0 or OpenCode v2 plugins"
 )]
 #[command(version)]
 pub struct Cli {
@@ -98,6 +98,35 @@ pub enum Command {
 
         #[arg(long, default_value = "A new Agent Plugins plugin")]
         description: String,
+    },
+    /// Convert one Claude plugin into an OpenCode v2 plugin package
+    ConvertOpenCode {
+        path: PathBuf,
+
+        #[arg(short, long, default_value = "./output")]
+        output: PathBuf,
+    },
+    /// Convert each Claude plugin in a directory into an OpenCode v2 plugin package
+    ConvertOpenCodeDir {
+        path: PathBuf,
+
+        #[arg(short, long, default_value = "./output")]
+        output: PathBuf,
+    },
+    /// Convert a Claude marketplace into OpenCode v2 plugin packages
+    ConvertOpenCodeMarketplace {
+        #[arg(long)]
+        repo: String,
+
+        #[arg(long, default_value = "main")]
+        branch: String,
+
+        #[arg(short, long, default_value = "./output")]
+        output: PathBuf,
+    },
+    /// Validate an OpenCode v2 plugin package produced by c2ap
+    ValidateOpenCode {
+        path: PathBuf,
     },
 }
 
@@ -192,8 +221,88 @@ impl Cli {
             } => {
                 self.init_plugin(name, output.as_path(), description)?;
             }
+            Command::ConvertOpenCode { path, output } => {
+                if self.verbose {
+                    eprintln!(
+                        "Converting single plugin to OpenCode v2: {}",
+                        path.display()
+                    );
+                }
+                let report =
+                    crate::opencode::convert_single(path, output, &self.opencode_options())?;
+                self.print_opencode_report(&report);
+            }
+            Command::ConvertOpenCodeDir { path, output } => {
+                if self.verbose {
+                    eprintln!(
+                        "Converting plugins in directory to OpenCode v2: {}",
+                        path.display()
+                    );
+                }
+                let report =
+                    crate::opencode::convert_directory(path, output, &self.opencode_options())?;
+                self.print_opencode_directory_report(&report);
+            }
+            Command::ConvertOpenCodeMarketplace {
+                repo,
+                branch,
+                output,
+            } => {
+                if self.verbose {
+                    eprintln!(
+                        "Converting marketplace to OpenCode v2: {} (branch: {})",
+                        repo, branch
+                    );
+                }
+                let report = crate::opencode::marketplace::convert_marketplace(
+                    repo,
+                    branch,
+                    output,
+                    &self.opencode_options(),
+                )?;
+                self.print_opencode_directory_report(&report);
+            }
+            Command::ValidateOpenCode { path } => {
+                let (errors, warnings) = crate::opencode::validate::validate(path);
+                for warning in &warnings {
+                    eprintln!("Warning: {warning}");
+                }
+                for error in &errors {
+                    eprintln!("Error: {error}");
+                }
+                if self.json {
+                    let value = serde_json::json!({
+                        "path": path.display().to_string(),
+                        "errors": errors,
+                        "warnings": warnings,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&value).unwrap());
+                } else {
+                    println!(
+                        "Validated {}: {} error(s), {} warning(s)",
+                        path.display(),
+                        errors.len(),
+                        warnings.len()
+                    );
+                }
+                if !errors.is_empty() {
+                    return Err(crate::error::Error::Validation {
+                        message: format!("{} validation error(s) found", errors.len()),
+                        source: None,
+                    });
+                }
+            }
         }
         Ok(())
+    }
+
+    fn opencode_options(&self) -> crate::opencode::OpenCodeOptions {
+        crate::opencode::OpenCodeOptions {
+            extension_namespace: self.extension_namespace.clone(),
+            strict: self.strict,
+            force: self.force,
+            preferred_name: None,
+        }
     }
 
     fn dry_run_print(&self) -> Result<()> {
@@ -233,6 +342,35 @@ impl Cli {
             }
             Command::Init { name, output, .. } => {
                 println!("[dry-run] init {} -> {}", name, output.display());
+            }
+            Command::ConvertOpenCode { path, output } => {
+                println!(
+                    "[dry-run] convert-opencode {} -> {}",
+                    path.display(),
+                    output.display()
+                );
+            }
+            Command::ConvertOpenCodeDir { path, output } => {
+                println!(
+                    "[dry-run] convert-opencode-dir {} -> {}",
+                    path.display(),
+                    output.display()
+                );
+            }
+            Command::ConvertOpenCodeMarketplace {
+                repo,
+                branch,
+                output,
+            } => {
+                println!(
+                    "[dry-run] convert-opencode-marketplace --repo {} --branch {} -> {}",
+                    repo,
+                    branch,
+                    output.display()
+                );
+            }
+            Command::ValidateOpenCode { path } => {
+                println!("[dry-run] validate-opencode {}", path.display());
             }
         }
         Ok(())
@@ -306,6 +444,79 @@ impl Cli {
         } else if !self.quiet {
             println!(
                 "Converted {} plugin(s), skipped {}",
+                report.plugins.len(),
+                report.skipped.len()
+            );
+        }
+    }
+
+    fn print_opencode_report(&self, report: &crate::opencode::OpenCodeReport) {
+        for warning in &report.warnings {
+            eprintln!("Warning: {warning}");
+        }
+        if self.json {
+            let value = serde_json::json!({
+                "name": report.name,
+                "output": report.output.display().to_string(),
+                "manifestSynthesized": report.manifest_synthesized,
+                "skills": report.skills_converted,
+                "agents": report.agents_converted,
+                "commands": report.commands_converted,
+                "mcpServers": report.mcp_servers,
+                "sidecarEntries": report.sidecar_entries,
+                "warnings": report.warnings,
+            });
+            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+        } else if !self.quiet {
+            println!(
+                "Converted '{}' to OpenCode v2 plugin {} ({} skills, {} agents, {} commands, {} mcp servers, {} sidecar entries{})",
+                report.name,
+                report.output.display(),
+                report.skills_converted,
+                report.agents_converted,
+                report.commands_converted,
+                report.mcp_servers,
+                report.sidecar_entries,
+                if report.manifest_synthesized {
+                    ", synthesized manifest"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+
+    fn print_opencode_directory_report(&self, report: &crate::opencode::OpenCodeDirectoryReport) {
+        for plugin in &report.plugins {
+            for warning in &plugin.warnings {
+                eprintln!("Warning: {warning}");
+            }
+        }
+        for skipped in &report.skipped {
+            eprintln!("Skipped: {skipped}");
+        }
+        if self.json {
+            let value = serde_json::json!({
+                "converted": report.plugins.len(),
+                "skipped": report.skipped.len(),
+                "plugins": report.plugins.iter().map(|plugin| {
+                    serde_json::json!({
+                        "name": plugin.name,
+                        "output": plugin.output.display().to_string(),
+                        "skills": plugin.skills_converted,
+                        "agents": plugin.agents_converted,
+                        "commands": plugin.commands_converted,
+                        "mcpServers": plugin.mcp_servers,
+                        "sidecarEntries": plugin.sidecar_entries,
+                        "warnings": plugin.warnings,
+                    })
+                }).collect::<Vec<_>>(),
+                "skippedItems": report.skipped,
+            });
+            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+        } else if !self.quiet {
+            println!(
+                "Converted {} OpenCode v2 plugin(s), skipped {}",
                 report.plugins.len(),
                 report.skipped.len()
             );

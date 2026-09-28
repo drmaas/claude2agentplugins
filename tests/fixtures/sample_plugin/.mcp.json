@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "local": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/servers/index.js",
+      "args": ["--stdio"],
+      "env": { "NODE_ENV": "production" }
+    },
+    "docs": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    },
+    "socket": {
+      "type": "ws",
+      "url": "wss://example.com/mcp"
+    }
+  }
+}

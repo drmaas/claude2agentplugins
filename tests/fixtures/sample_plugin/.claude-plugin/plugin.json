@@ -1,0 +1,6 @@
+{
+  "name": "Sample Plugin",
+  "version": "1.2.3",
+  "description": "A sample Claude plugin",
+  "license": "MIT"
+}

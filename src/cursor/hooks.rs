@@ -165,11 +165,9 @@ pub fn convert_value(value: &serde_json::Value) -> (Option<serde_json::Value>, V
             continue;
         };
         for entry in entries {
-            for converted in convert_entry(event, cursor_event, entry, &mut warnings) {
-                grouped
-                    .entry(cursor_event.to_string())
-                    .or_default()
-                    .push(converted);
+            for (event_name, converted) in convert_entry(event, cursor_event, entry, &mut warnings)
+            {
+                grouped.entry(event_name).or_default().push(converted);
             }
         }
     }
@@ -205,7 +203,7 @@ fn convert_entry(
     cursor_event: &str,
     entry: &serde_json::Value,
     warnings: &mut Vec<String>,
-) -> Vec<serde_json::Value> {
+) -> Vec<(String, serde_json::Value)> {
     if entry.get("hooks").is_some() {
         return flatten_group(source_event, cursor_event, entry, warnings);
     }
@@ -219,7 +217,7 @@ fn flatten_group(
     cursor_event: &str,
     entry: &serde_json::Value,
     warnings: &mut Vec<String>,
-) -> Vec<serde_json::Value> {
+) -> Vec<(String, serde_json::Value)> {
     let matcher = entry.get("matcher").and_then(|v| v.as_str());
     let Some(hooks) = entry.get("hooks").and_then(|v| v.as_array()) else {
         warnings.push(format!(
@@ -244,7 +242,7 @@ fn convert_action(
     group_matcher: Option<&str>,
     hook: &serde_json::Value,
     warnings: &mut Vec<String>,
-) -> Option<serde_json::Value> {
+) -> Option<(String, serde_json::Value)> {
     let kind = hook
         .get("type")
         .and_then(|v| v.as_str())
@@ -260,6 +258,12 @@ fn convert_action(
             "Hook event '{source_event}': args are not a Cursor hook field; dropped (original preserved in the sidecar)"
         ));
     }
+
+    let matcher = hook
+        .get("matcher")
+        .and_then(|v| v.as_str())
+        .or(group_matcher);
+    let (cursor_event, matcher) = specialize_cursor_event(cursor_event, matcher, warnings);
 
     let mut out = serde_json::Map::new();
     if kind == "prompt" {
@@ -296,10 +300,6 @@ fn convert_action(
         out.insert("timeout".to_string(), timeout.clone());
     }
 
-    let matcher = hook
-        .get("matcher")
-        .and_then(|v| v.as_str())
-        .or(group_matcher);
     if let Some(matcher) = matcher
         && !matcher.is_empty()
         && matcher != ".*"
@@ -314,7 +314,42 @@ fn convert_action(
         }
     }
 
-    Some(serde_json::Value::Object(out))
+    Some((cursor_event.to_string(), serde_json::Value::Object(out)))
+}
+
+fn specialize_cursor_event<'a>(
+    cursor_event: &'a str,
+    matcher: Option<&'a str>,
+    warnings: &mut Vec<String>,
+) -> (&'a str, Option<&'a str>) {
+    let bash_only = matcher.is_some_and(|m| {
+        let parts: Vec<_> = m
+            .split('|')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        !parts.is_empty()
+            && parts
+                .iter()
+                .all(|p| p.eq_ignore_ascii_case("bash") || p.eq_ignore_ascii_case("shell"))
+    });
+    match (cursor_event, bash_only) {
+        ("preToolUse", true) => {
+            warnings.push(
+                "Hook event 'PreToolUse' with Bash-only matcher mapped to Cursor beforeShellExecution"
+                    .to_string(),
+            );
+            ("beforeShellExecution", None)
+        }
+        ("postToolUse", true) => {
+            warnings.push(
+                "Hook event 'PostToolUse' with Bash-only matcher mapped to Cursor afterShellExecution"
+                    .to_string(),
+            );
+            ("afterShellExecution", None)
+        }
+        _ => (cursor_event, matcher),
+    }
 }
 
 fn rewrite_tool_matcher(matcher: &str, event: &str, warnings: &mut Vec<String>) -> String {
@@ -375,6 +410,31 @@ mod tests {
         assert_eq!(entry["matcher"], "Shell|Write");
         assert!(config["hooks"].get("Notification").is_none());
         assert!(warnings.iter().any(|w| w.contains("Notification")));
+    }
+
+    #[test]
+    fn maps_bash_only_pre_tool_use_to_before_shell_execution() {
+        let value = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{ "type": "command", "command": "echo blocked" }]
+                }]
+            }
+        });
+        let (config, warnings) = convert_value(&value);
+        let config = config.unwrap();
+        assert!(config["hooks"].get("preToolUse").is_none());
+        assert_eq!(
+            config["hooks"]["beforeShellExecution"][0]["command"],
+            "echo blocked"
+        );
+        assert!(
+            config["hooks"]["beforeShellExecution"][0]
+                .get("matcher")
+                .is_none()
+        );
+        assert!(warnings.iter().any(|w| w.contains("beforeShellExecution")));
     }
 
     #[test]

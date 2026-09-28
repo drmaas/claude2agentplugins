@@ -15,6 +15,7 @@ pub fn write(
     manifest: &ClaudeManifest,
     namespace: &str,
     root_kept: &HashSet<String>,
+    hooks_mapped: bool,
 ) -> Result<SidecarReport> {
     if namespace.contains("..") || namespace.contains('/') || namespace.contains('\\') {
         return Err(crate::error::Error::Conversion(format!(
@@ -28,11 +29,14 @@ pub fn write(
     let mut warned = HashSet::new();
     let mut entries = 0;
 
+    let hook_reason = if hooks_mapped {
+        "Original Claude hooks preserved after mapping command hooks onto ctx.tool.hook / ctx.session.hook / ctx.shell.hook / ctx.permission.hook"
+    } else {
+        "Claude hooks that could not map onto OpenCode v2 ctx.tool.hook / ctx.session.hook / ctx.shell.hook / ctx.permission.hook"
+    };
+
     let directories = [
-        (
-            "hooks",
-            "Claude hooks are shell event handlers, not OpenCode v2 plugin hooks (ctx.tool.hook, ctx.session.hook, ctx.shell.hook)",
-        ),
+        ("hooks", hook_reason),
         ("scripts", "scripts/ has no OpenCode v2 plugin component"),
         ("bin", "bin/ has no OpenCode v2 plugin component"),
         ("workflows", "workflows/ has no OpenCode v2 equivalent"),
@@ -128,9 +132,15 @@ pub fn write(
             &mut warned,
             &mut warnings,
             "hooks",
-            format!(
-                "Claude hooks are shell event handlers, not OpenCode v2 plugin hooks; preserved under extensions/{namespace}/hooks"
-            ),
+            if hooks_mapped {
+                format!(
+                    "Original inline Claude hooks preserved under extensions/{namespace}/hooks after mapping onto OpenCode v2 hook APIs"
+                )
+            } else {
+                format!(
+                    "Claude hooks that could not map onto OpenCode v2 hook APIs; preserved under extensions/{namespace}/hooks"
+                )
+            },
         );
     }
 

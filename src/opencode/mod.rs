@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod commands;
+pub mod hooks;
 pub mod markdown;
 pub mod marketplace;
 pub mod mcp;
@@ -43,6 +44,7 @@ pub struct OpenCodeReport {
     pub agents_converted: usize,
     pub commands_converted: usize,
     pub mcp_servers: usize,
+    pub hooks_mapped: usize,
     pub sidecar_entries: usize,
     pub warnings: Vec<String>,
 }
@@ -107,6 +109,8 @@ pub fn convert_single(
     warnings.extend(agent_warnings);
     let (commands, command_warnings) = commands::convert(input, &manifest)?;
     warnings.extend(command_warnings);
+    let mut converted_hooks = hooks::convert(input, &manifest)?;
+    warnings.append(&mut converted_hooks.warnings);
 
     let loaded_mcp = mcp::load(input, &manifest);
     warnings.extend(loaded_mcp.warnings);
@@ -122,12 +126,21 @@ pub fn convert_single(
     warnings.append(&mut converted_mcp.warnings);
 
     std::fs::create_dir_all(output)?;
-    let root_kept = copy_referenced(
+    let mut root_kept = copy_referenced(
         input,
         output,
         &converted_mcp.referenced_roots,
         &mut warnings,
     )?;
+    if (converted_hooks.needs_scripts || !converted_hooks.mapped.is_empty())
+        && hooks::copy_scripts(input, output)?
+    {
+        root_kept.insert("scripts".to_string());
+        warnings.push(
+            "scripts/ was copied into the OpenCode v2 plugin package so mapped Claude command hooks can run"
+                .to_string(),
+        );
+    }
     render::write_package(output, &manifest, &package_name, &version)?;
     render::write_plugin(
         output,
@@ -136,6 +149,7 @@ pub fn convert_single(
         &agents,
         &commands,
         &converted_mcp.servers,
+        &converted_hooks.mapped,
     )?;
 
     let sidecar = sidecar::write(
@@ -144,6 +158,7 @@ pub fn convert_single(
         &manifest,
         &options.extension_namespace,
         &root_kept,
+        !converted_hooks.mapped.is_empty(),
     )?;
     warnings.extend(sidecar.warnings);
     copy_root_docs(input, output)?;
@@ -167,6 +182,7 @@ pub fn convert_single(
         agents_converted: agents.len(),
         commands_converted: commands.len(),
         mcp_servers: converted_mcp.servers.len(),
+        hooks_mapped: converted_hooks.mapped.len(),
         sidecar_entries: sidecar.entries,
         warnings,
     })

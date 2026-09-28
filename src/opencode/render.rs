@@ -6,6 +6,7 @@ use crate::claude::manifest::ClaudeManifest;
 use crate::error::Result;
 use crate::opencode::agents::RegisteredAgent;
 use crate::opencode::commands::RegisteredCommand;
+use crate::opencode::hooks::{HookDomain, MappedHook};
 use crate::opencode::mcp::{CommandPart, OpenCodeMcpServer};
 use crate::opencode::skills::RegisteredSkill;
 
@@ -48,8 +49,10 @@ pub fn write_plugin(
     agents: &[RegisteredAgent],
     commands: &[RegisteredCommand],
     servers: &std::collections::BTreeMap<String, OpenCodeMcpServer>,
+    hooks: &[MappedHook],
 ) -> Result<()> {
     let needs_root = !skills.is_empty()
+        || !hooks.is_empty()
         || servers.values().any(|server| match server {
             OpenCodeMcpServer::Local {
                 command,
@@ -63,12 +66,19 @@ pub fn write_plugin(
     source.push_str("import { Plugin } from \"@opencode/plugin\"\n");
     if needs_root {
         source.push_str("import path from \"node:path\"\n");
-        source.push_str("import { fileURLToPath } from \"node:url\"\n\n");
+        source.push_str("import { fileURLToPath } from \"node:url\"\n");
+        if !hooks.is_empty() {
+            source.push_str("import { spawnSync } from \"node:child_process\"\n");
+        }
+        source.push('\n');
         source.push_str(
             "const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), \"..\")\n\n",
         );
     } else {
         source.push('\n');
+    }
+    if !hooks.is_empty() {
+        append_hook_helpers(&mut source);
     }
     source.push_str("export default Plugin.define({\n");
     source.push_str(&format!("  id: {},\n", js_string(plugin_id)));
@@ -170,6 +180,9 @@ pub fn write_plugin(
         }
         source.push_str("    })\n");
     }
+    for hook in hooks {
+        append_hook_registration(&mut source, hook);
+    }
     source.push_str("  },\n");
     source.push_str("})\n");
 
@@ -179,6 +192,237 @@ pub fn write_plugin(
     }
     std::fs::write(index, source)?;
     Ok(())
+}
+
+fn append_hook_helpers(source: &mut String) {
+    source.push_str(
+        r#"function runClaudeHook(command, payload) {
+  const resolved =
+    command.startsWith("./") || command.startsWith("../")
+      ? path.resolve(root, command)
+      : command
+  const result = spawnSync(resolved, {
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+    shell: true,
+    cwd: root,
+    env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CURSOR_PLUGIN_ROOT: root },
+  })
+  return {
+    exitCode: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  }
+}
+
+function parseClaudeHookJson(stdout) {
+  const text = stdout.trim()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    const start = text.indexOf("{")
+    const end = text.lastIndexOf("}")
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1))
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+}
+
+function matcherHits(matcher, value) {
+  if (!matcher) return true
+  const needle = String(value ?? "").toLowerCase()
+  return matcher
+    .split("|")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .some((part) => needle === part || needle.includes(part))
+}
+
+function applyPermissionDecision(event, parsed, exitCode) {
+  const specific = parsed?.hookSpecificOutput ?? {}
+  const decision =
+    specific.permissionDecision ??
+    specific.decision?.behavior ??
+    parsed?.decision?.behavior ??
+    (parsed?.decision === "block" ? "deny" : undefined)
+  if (decision === "allow" || decision === "deny" || decision === "ask") {
+    event.effect = decision
+  } else if (exitCode === 2) {
+    event.effect = "deny"
+  }
+  const message =
+    specific.permissionDecisionReason ??
+    specific.decision?.message ??
+    parsed?.reason
+  if (typeof message === "string" && message) event.message = message
+}
+
+"#,
+    );
+}
+
+fn append_hook_registration(source: &mut String, hook: &MappedHook) {
+    for note in &hook.notes {
+        source.push_str(&format!("    // {}\n", note.replace('\n', " ")));
+    }
+    let command = js_string(&hook.command);
+    let event = js_string(&hook.claude_event);
+    let matcher = hook
+        .matcher
+        .as_ref()
+        .map(|value| format!(" {}", js_string(value)))
+        .unwrap_or_else(|| " null".to_string());
+
+    match hook.domain {
+        HookDomain::Shell => {
+            source.push_str(&format!(
+                "    await ctx.shell.hook({}, async (event) => {{\n",
+                js_string(hook.hook_name)
+            ));
+            source.push_str(&format!(
+                "      const result = runClaudeHook({}, {{\n",
+                command
+            ));
+            source.push_str(&format!("        hook_event_name: {},\n", event));
+            source.push_str("        tool_name: \"Bash\",\n");
+            source.push_str("        tool_input: { command: event.command },\n");
+            source.push_str("        cwd: event.cwd,\n");
+            source.push_str("      })\n");
+            source.push_str("      const parsed = parseClaudeHookJson(result.stdout)\n");
+            source.push_str("      const updated = parsed?.hookSpecificOutput?.updatedInput\n");
+            source.push_str(
+                "      if (updated && typeof updated.command === \"string\") event.command = updated.command\n",
+            );
+            source.push_str("      const denied =\n");
+            source.push_str("        result.exitCode === 2 ||\n");
+            source.push_str(
+                "        parsed?.hookSpecificOutput?.permissionDecision === \"deny\" ||\n",
+            );
+            source.push_str("        parsed?.decision === \"block\"\n");
+            source.push_str("      if (denied) event.command = \"false\"\n");
+            source.push_str("    })\n");
+        }
+        HookDomain::Tool => {
+            source.push_str(&format!(
+                "    await ctx.tool.hook({}, async (event) => {{\n",
+                js_string(hook.hook_name)
+            ));
+            source.push_str(&format!(
+                "      if (!matcherHits({}, event.tool)) return\n",
+                matcher.trim()
+            ));
+            if let Some(status) = hook.after_status {
+                source.push_str(&format!(
+                    "      if (event.status !== {}) return\n",
+                    js_string(status)
+                ));
+            }
+            source.push_str(&format!(
+                "      const result = runClaudeHook({}, {{\n",
+                command
+            ));
+            source.push_str(&format!("        hook_event_name: {},\n", event));
+            source.push_str("        tool_name: event.tool,\n");
+            source.push_str(
+                "        tool_input: event.input ?? event.args ?? event.toolInput ?? {},\n",
+            );
+            if hook.hook_name == "execute.after" {
+                source.push_str("        tool_response: event.result ?? event.error ?? null,\n");
+            }
+            source.push_str("      })\n");
+            source.push_str("      const parsed = parseClaudeHookJson(result.stdout)\n");
+            if hook.hook_name == "execute.before" {
+                source.push_str("      const updated = parsed?.hookSpecificOutput?.updatedInput\n");
+                source.push_str(
+                    "      if (updated && event.input && typeof event.input === \"object\") {\n",
+                );
+                source.push_str("        Object.assign(event.input, updated)\n");
+                source.push_str("      }\n");
+                source.push_str("      const denied =\n");
+                source.push_str("        result.exitCode === 2 ||\n");
+                source.push_str(
+                    "        parsed?.hookSpecificOutput?.permissionDecision === \"deny\" ||\n",
+                );
+                source.push_str("        parsed?.decision === \"block\"\n");
+                source.push_str(
+                    "      if (denied) throw new Error(parsed?.hookSpecificOutput?.permissionDecisionReason ?? parsed?.reason ?? result.stderr ?? \"blocked by converted Claude hook\")\n",
+                );
+            } else {
+                source.push_str(
+                    "      const updated = parsed?.hookSpecificOutput?.updatedToolOutput\n",
+                );
+                source.push_str(
+                    "      if (updated !== undefined && event.status === \"completed\") event.result = updated\n",
+                );
+            }
+            source.push_str("    })\n");
+        }
+        HookDomain::Session => {
+            source.push_str(&format!(
+                "    await ctx.session.hook({}, async (event) => {{\n",
+                js_string(hook.hook_name)
+            ));
+            source.push_str(&format!(
+                "      const result = runClaudeHook({}, {{\n",
+                command
+            ));
+            source.push_str(&format!("        hook_event_name: {},\n", event));
+            if hook.hook_name == "prompt" {
+                source.push_str("        prompt: event.prompt?.text ?? \"\",\n");
+            }
+            source.push_str("        session_id: event.sessionID,\n");
+            source.push_str("      })\n");
+            source.push_str("      const parsed = parseClaudeHookJson(result.stdout)\n");
+            if hook.hook_name == "prompt" {
+                source.push_str("      const blocked =\n");
+                source
+                    .push_str("        result.exitCode === 2 || parsed?.decision === \"block\"\n");
+                source.push_str("      if (blocked && event.prompt) {\n");
+                source.push_str(
+                    "        event.prompt.text = parsed?.reason ? `[blocked] ${parsed.reason}` : \"\"\n",
+                );
+                source.push_str("      }\n");
+                source.push_str(
+                    "      const extra = parsed?.hookSpecificOutput?.additionalContext\n",
+                );
+                source.push_str(
+                    "      if (typeof extra === \"string\" && extra && event.prompt) {\n",
+                );
+                source
+                    .push_str("        event.prompt.text = `${event.prompt.text}\\n\\n${extra}`\n");
+                source.push_str("      }\n");
+            }
+            source.push_str("    })\n");
+        }
+        HookDomain::Permission => {
+            source.push_str(&format!(
+                "    await ctx.permission.hook({}, async (event) => {{\n",
+                js_string(hook.hook_name)
+            ));
+            source.push_str(&format!(
+                "      if (!matcherHits({}, event.action)) return\n",
+                matcher.trim()
+            ));
+            source.push_str(&format!(
+                "      const result = runClaudeHook({}, {{\n",
+                command
+            ));
+            source.push_str(&format!("        hook_event_name: {},\n", event));
+            source.push_str("        tool_name: event.action,\n");
+            source.push_str("        tool_input: { resources: event.resources },\n");
+            source.push_str("        session_id: event.sessionID,\n");
+            source.push_str("      })\n");
+            source.push_str("      const parsed = parseClaudeHookJson(result.stdout)\n");
+            source.push_str("      applyPermissionDecision(event, parsed, result.exitCode)\n");
+            source.push_str("    })\n");
+        }
+    }
 }
 
 fn mcp_literal(server: &OpenCodeMcpServer) -> String {

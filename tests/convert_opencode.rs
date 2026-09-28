@@ -20,12 +20,13 @@ fn converts_claude_plugin_to_opencode_v2_package() {
     assert_eq!(report.agents_converted, 1);
     assert_eq!(report.commands_converted, 1);
     assert_eq!(report.mcp_servers, 2);
+    assert!(report.hooks_mapped >= 2);
     assert!(report.sidecar_entries > 0);
     assert!(
         report
             .warnings
             .iter()
-            .any(|warning| warning.contains("hooks"))
+            .any(|warning| warning.contains("Mapped") && warning.contains("hook"))
     );
     assert!(
         report
@@ -61,6 +62,11 @@ fn converts_claude_plugin_to_opencode_v2_package() {
     assert!(source.contains("agent.mode = \"subagent\""));
     assert!(source.contains("agent.system = \"You review the diff.\""));
     assert!(source.contains("effect: \"allow\""));
+    assert!(source.contains("ctx.shell.hook"));
+    assert!(source.contains("create.before"));
+    assert!(source.contains("ctx.permission.hook"));
+    assert!(source.contains("runClaudeHook"));
+    assert!(source.contains("echo blocked"));
     assert!(source.contains("ctx.command.transform"));
     assert!(source.contains("name: \"ship\""));
     assert!(source.contains("ctx.session.prompt"));

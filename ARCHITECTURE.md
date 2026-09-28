@@ -46,6 +46,7 @@ src/
 │   ├── skills.rs           # skills → editor.add + skills/<name>/SKILL.md
 │   ├── agents.rs           # agents → editor.update (Agent.Info)
 │   ├── commands.rs         # commands → editor.add execute → session.prompt
+│   ├── hooks.rs            # Claude hooks → ctx.tool/session/shell/permission.hook
 │   ├── mcp.rs              # .mcp.json → editor.set local/remote
 │   ├── sidecar.rs          # unmapped Claude files → extensions/<namespace>/
 │   ├── validate.rs         # OpenCode v2 package checks (`validate-opencode`)
@@ -100,5 +101,5 @@ convert::convert_single(input, output, options)
 7. **Idempotent output**: Non-empty output directories are refused unless `--force` is given; normalized name collisions in `convert-dir`/`convert-marketplace` are reported as errors.
 8. **Stdio default**: Claude MCP servers are implicit stdio; Agent Plugins requires explicit `type: "stdio"`. Remote `http`/`sse` servers map to `streamable-http`/`sse`; `ws` servers have no equivalent and are warned about.
 9. **Name normalization**: Claude plugin names are auto-normalized (lowercase, hyphens for spaces/underscores), and skill names are normalized to the stricter Agent Skills character set.
-10. **OpenCode v2 is a separate target**: `convert-opencode` does not change the Agent Plugins or Cursor paths. It writes a v2 plugin package (`package.json` with `type: "module"` and `@opencode/plugin`, plus `src/index.ts` that default-exports `Plugin.define`). Skills, commands, agents, and MCP servers are registered in `setup` through `ctx.skill`, `ctx.command`, `ctx.agent`, and `ctx.mcp`. Claude hooks and other unmapped files stay in `extensions/<namespace>/` with warnings.
-11. **Cursor is `--target cursor`**: `convert`, `convert-dir`, and `convert-marketplace` write `.cursor-plugin/plugin.json` when that target is set. Cursor conversion is independent of the OpenCode commands.
+10. **OpenCode v2 is a separate target**: `convert-opencode` does not change the Agent Plugins or Cursor paths. It writes a v2 plugin package (`package.json` with `type: "module"` and `@opencode/plugin`, plus `src/index.ts` that default-exports `Plugin.define`). Skills, commands, agents, and MCP servers are registered in `setup` through `ctx.skill`, `ctx.command`, `ctx.agent`, and `ctx.mcp`. Claude command hooks map onto `ctx.tool.hook` / `ctx.session.hook` / `ctx.shell.hook` / `ctx.permission.hook` when semantics fit; unmapped hook events and non-command hook types stay in `extensions/<namespace>/` with warnings.
+11. **Cursor is `--target cursor`**: `convert`, `convert-dir`, and `convert-marketplace` write `.cursor-plugin/plugin.json` when that target is set. Cursor conversion is independent of the OpenCode commands. Agents land in `agents/`; hooks land in `hooks/hooks.json` (with Bash-only tool events specialized to `beforeShellExecution` / `afterShellExecution`).

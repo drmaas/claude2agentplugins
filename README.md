@@ -133,18 +133,34 @@ The package follows the [v2 plugin guide](https://opencode.ai/v2/docs/build/plug
 | `skills/*/SKILL.md`, root `SKILL.md` | `ctx.skill.transform` → `editor.add({ id, name, description, location, content })`. The skill file is also written at `skills/<name>/SKILL.md` and `location` points at it |
 | `commands/*.md` | `ctx.command.transform` → `editor.add({ name, description, execute })`. `execute` calls `ctx.session.prompt` with the command body. `$ARGUMENTS` is replaced with `prompt.text` |
 | `agents/*.md` | `ctx.agent.transform` → `editor.update(id, ...)`. Sets `description`, `mode: "subagent"`, `system` (the prompt), `permissions`, and `color` / `steps` when they match [Agent.Info](https://opencode.ai/v2/docs/build/plugins/). v2 has no `editor.add` for agents; `update` supplies the fields on that id |
+| `hooks/hooks.json` command hooks when a faithful mapping exists | Registered in `setup` via OpenCode v2 hook APIs (see table below). Commands run through `child_process.spawnSync` with a best-effort Claude-compatible stdin JSON payload. `${CLAUDE_PLUGIN_ROOT}` becomes the package root at runtime; `scripts/` is copied when referenced |
 | `.mcp.json` stdio | `ctx.mcp.transform` → `editor.set(name, { type: "local", command, environment, cwd })`. `command` is a string array. `${CLAUDE_PLUGIN_ROOT}` becomes `path.join(root, ...)` inside the package |
 | `.mcp.json` `http` and `sse` | `editor.set(name, { type: "remote", url, headers })`. SSE is warned because v2 has one remote transport |
 | `README.md`, `LICENSE`, `CHANGELOG.md` | Copied to the package root |
 
 OpenCode v2 agent permissions are `{ action, resource, effect }` rules. A Claude `tools` allowlist becomes a deny-all rule followed by `allow` rules for the mapped actions (`read`, `edit`, `bash`, and the other built-in tool names). An omitted tools list becomes `{ action: "*", resource: "*", effect: "allow" }`.
 
+### Hook mapping (OpenCode v2)
+
+| Claude hook event | OpenCode v2 registration | Notes |
+|---|---|---|
+| `PreToolUse` (Bash / Shell matcher) | `ctx.shell.hook("create.before")` and `ctx.permission.hook("evaluate")` | Deny / exit 2 rewrites the shell command to `false` (best-effort block) and sets permission `effect` |
+| `PreToolUse` (other / mixed tools) | `ctx.tool.hook("execute.before")` and `ctx.permission.hook("evaluate")`; Bash portion also gets `ctx.shell.hook` | `updatedInput` is applied when present; deny / exit 2 throws |
+| `PostToolUse` | `ctx.tool.hook("execute.after")` (status `completed`) | Applies `updatedToolOutput` when present |
+| `PostToolUseFailure` | `ctx.tool.hook("execute.after")` (status `error`) | Observational |
+| `UserPromptSubmit` | `ctx.session.hook("prompt")` | Block clears / annotates prompt text (no typed rejection API) |
+| `PermissionRequest` | `ctx.permission.hook("evaluate")` | Maps `permissionDecision` / `decision.behavior` to `effect` |
+| `PreCompact` | `ctx.session.hook("compaction")` | Side effects only |
+| `Notification`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, `Setup`, and other Claude-only events | *sidecar only* | No faithful OpenCode v2 hook; warned and preserved under `extensions/` |
+| Hook types other than `command` (`prompt`, `http`, `mcp_tool`, `agent`) | *sidecar only* | OpenCode hooks are TypeScript callbacks; those Claude handler kinds are not translated |
+
 ### Sidecar
 
 Claude data that v2 plugins do not load is copied to `extensions/<namespace>/` (default `extensions/com.claude.code/`) and reported as a warning:
 
-- `hooks/` — Claude hook entries run shell commands. OpenCode v2 hooks are `ctx.tool.hook`, `ctx.session.hook`, `ctx.shell.hook`, and `ctx.permission.hook`, which are not a translation of those command configs
-- `workflows/`, `monitors/`, `output-styles/`, `themes/`, `evals/`, `scripts/`, `bin/`
+- Original `hooks/` (always kept, including when command hooks were also mapped onto `ctx.*.hook`)
+- `workflows/`, `monitors/`, `output-styles/`, `themes/`, `evals/`, `bin/`
+- `scripts/` when not copied to the package root for mapped hooks
 - `.lsp.json`, `settings.json`, and the original `.mcp.json`
 - Manifest `userConfig`, `dependencies`, `channels`, and `defaultEnabled`
 
@@ -236,7 +252,7 @@ Cursor output follows the current Cursor plugin docs: a `.cursor-plugin/plugin.j
 | `agents/*.md` | `agents/<name>.md` with `name`, `description`, and the prompt body |
 | `commands/*.md` | `commands/<name>.md` with `name` and `description` |
 | `commands/*.md` with `--convert-commands` | `skills/<name>/SKILL.md` with `disable-model-invocation: true` (Cursor's explicit slash-command style) and no `commands/` copy |
-| `hooks/hooks.json` events Cursor documents (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`, `PreCompact`) | `hooks/hooks.json` (`version: 1`). Nested Claude groups are flattened. `Bash` → `Shell`, `Edit` → `Write`. `${CLAUDE_PLUGIN_ROOT}/...` becomes `./...` |
+| `hooks/hooks.json` events Cursor documents (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`, `PreCompact`) | `hooks/hooks.json` (`version: 1`). Nested Claude groups are flattened. `Bash` → `Shell`, `Edit` → `Write`. Bash-only `PreToolUse` / `PostToolUse` specialize to `beforeShellExecution` / `afterShellExecution`. `${CLAUDE_PLUGIN_ROOT}/...` becomes `./...` |
 | `rules/`, `.claude/rules/`, manifest `rules`, `CLAUDE.md` | `rules/*.mdc`. Claude `paths` becomes Cursor `globs`. A pathless rule or `CLAUDE.md` is `alwaysApply: true` |
 | `scripts/` | `scripts/` (Cursor's hook and utility script directory) |
 | `bin/` | `bin/` so `${CURSOR_PLUGIN_ROOT}/bin/...` commands keep working |

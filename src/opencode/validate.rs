@@ -125,4 +125,14 @@ fn validate_source(source: &str, errors: &mut Vec<String>) {
     if source.contains("ctx.agent.transform") && !source.contains("editor.update") {
         errors.push("src/index.ts agent transform does not call editor.update".to_string());
     }
+    if (source.contains("ctx.tool.hook")
+        || source.contains("ctx.session.hook")
+        || source.contains("ctx.shell.hook")
+        || source.contains("ctx.permission.hook"))
+        && !source.contains("runClaudeHook")
+    {
+        errors.push(
+            "src/index.ts registers OpenCode hooks but is missing runClaudeHook helper".to_string(),
+        );
+    }
 }

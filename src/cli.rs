@@ -495,19 +495,21 @@ impl Cli {
                 "agents": report.agents_converted,
                 "commands": report.commands_converted,
                 "mcpServers": report.mcp_servers,
+                "hooksMapped": report.hooks_mapped,
                 "sidecarEntries": report.sidecar_entries,
                 "warnings": report.warnings,
             });
             println!("{}", serde_json::to_string_pretty(&value).unwrap());
         } else if !self.quiet {
             println!(
-                "Converted '{}' to OpenCode v2 plugin {} ({} skills, {} agents, {} commands, {} mcp servers, {} sidecar entries{})",
+                "Converted '{}' to OpenCode v2 plugin {} ({} skills, {} agents, {} commands, {} mcp servers, {} hooks mapped, {} sidecar entries{})",
                 report.name,
                 report.output.display(),
                 report.skills_converted,
                 report.agents_converted,
                 report.commands_converted,
                 report.mcp_servers,
+                report.hooks_mapped,
                 report.sidecar_entries,
                 if report.manifest_synthesized {
                     ", synthesized manifest"
@@ -539,6 +541,7 @@ impl Cli {
                         "agents": plugin.agents_converted,
                         "commands": plugin.commands_converted,
                         "mcpServers": plugin.mcp_servers,
+                        "hooksMapped": plugin.hooks_mapped,
                         "sidecarEntries": plugin.sidecar_entries,
                         "warnings": plugin.warnings,
                     })

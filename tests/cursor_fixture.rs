@@ -72,6 +72,8 @@ fn converts_fixture_to_cursor_plugin() {
     );
     assert_eq!(hooks["hooks"]["preToolUse"][0]["matcher"], "Shell|Write");
     assert!(hooks["hooks"].get("Notification").is_none());
+    assert!(hooks["hooks"].get("beforeShellExecution").is_none());
+    assert!(!agent.contains("tools:"));
 
     let mcp: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(output.join("mcp.json")).unwrap()).unwrap();

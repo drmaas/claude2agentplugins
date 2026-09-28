@@ -40,6 +40,16 @@ src/
 │   ├── mod.rs              # convert_marketplace (git URL, owner/repo, or local directory)
 │   ├── clone.rs            # git clone with ref/sha pinning
 │   └── convert.rs          # Batch convert all plugins (per-source fetch, collision detection)
+├── opencode/               # OpenCode v2 plugin package target
+│   ├── mod.rs              # convert_single / convert_directory
+│   ├── render.rs           # package.json + src/index.ts (Plugin.define)
+│   ├── skills.rs           # skills → editor.add + skills/<name>/SKILL.md
+│   ├── agents.rs           # agents → editor.update (Agent.Info)
+│   ├── commands.rs         # commands → editor.add execute → session.prompt
+│   ├── mcp.rs              # .mcp.json → editor.set local/remote
+│   ├── sidecar.rs          # unmapped Claude files → extensions/<namespace>/
+│   ├── validate.rs         # OpenCode v2 package checks (`validate-opencode`)
+│   └── marketplace.rs      # marketplace batch mode for the OpenCode target
 └── validate/               # Validation rules
     ├── name.rs             # Plugin/skill name constraints and normalization
     ├── skill.rs            # Skill frontmatter validation
@@ -59,7 +69,11 @@ cli.rs (Clap parsing)
     ├── Command::ConvertDir      → convert::convert_directory()
     ├── Command::ConvertMarketplace → marketplace::convert_marketplace()
     ├── Command::Validate        → validate::plugin::validate_plugin()
-    └── Command::Init            → scaffold plugin.json + skills/<name>/SKILL.md
+    ├── Command::Init            → scaffold plugin.json + skills/<name>/SKILL.md
+    ├── Command::ConvertOpenCode → opencode::convert_single()
+    ├── Command::ConvertOpenCodeDir → opencode::convert_directory()
+    ├── Command::ConvertOpenCodeMarketplace → opencode::marketplace::convert_marketplace()
+    └── Command::ValidateOpenCode → opencode::validate::validate()
 
 convert::convert_single(input, output, options)
     │
@@ -86,3 +100,5 @@ convert::convert_single(input, output, options)
 7. **Idempotent output**: Non-empty output directories are refused unless `--force` is given; normalized name collisions in `convert-dir`/`convert-marketplace` are reported as errors.
 8. **Stdio default**: Claude MCP servers are implicit stdio; Agent Plugins requires explicit `type: "stdio"`. Remote `http`/`sse` servers map to `streamable-http`/`sse`; `ws` servers have no equivalent and are warned about.
 9. **Name normalization**: Claude plugin names are auto-normalized (lowercase, hyphens for spaces/underscores), and skill names are normalized to the stricter Agent Skills character set.
+10. **OpenCode v2 is a separate target**: `convert-opencode` does not change the Agent Plugins or Cursor paths. It writes a v2 plugin package (`package.json` with `type: "module"` and `@opencode/plugin`, plus `src/index.ts` that default-exports `Plugin.define`). Skills, commands, agents, and MCP servers are registered in `setup` through `ctx.skill`, `ctx.command`, `ctx.agent`, and `ctx.mcp`. Claude hooks and other unmapped files stay in `extensions/<namespace>/` with warnings.
+11. **Cursor is `--target cursor`**: `convert`, `convert-dir`, and `convert-marketplace` write `.cursor-plugin/plugin.json` when that target is set. Cursor conversion is independent of the OpenCode commands.

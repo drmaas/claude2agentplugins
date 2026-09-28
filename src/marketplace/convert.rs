@@ -65,12 +65,12 @@ pub fn batch_convert(
     Ok(report)
 }
 
-struct FetchedPlugin {
-    path: PathBuf,
+pub(crate) struct FetchedPlugin {
+    pub path: PathBuf,
     _keep: Option<tempfile::TempDir>,
 }
 
-fn resolve_plugin_dir(
+pub(crate) fn resolve_plugin_dir(
     repo_dir: &Path,
     source: &ResolvedSource,
     plugin_root: Option<&str>,

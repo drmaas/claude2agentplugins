@@ -1,6 +1,6 @@
 # c2ap — Claude Plugin Converter
 
-Convert [Claude Code](https://code.claude.com/docs/en/plugins) plugins to [Agent Plugins](https://agent-plugins.org) v1.0.0 or to a [Cursor plugin](https://cursor.com/docs/plugins). The default target is Agent Plugins. Pass `--target cursor` for Cursor's `.cursor-plugin/plugin.json` layout.
+Convert [Claude Code](https://code.claude.com/docs/en/plugins) plugins to [Agent Plugins](https://agent-plugins.org) v1.0.0, a [Cursor plugin](https://cursor.com/docs/plugins), or an [OpenCode v2](https://opencode.ai/v2/docs/plugins/) plugin package. The default target is Agent Plugins. Pass `--target cursor` for Cursor's `.cursor-plugin/plugin.json` layout, or use `convert-opencode` for an OpenCode v2 plugin package.
 
 ## Installation
 
@@ -93,12 +93,62 @@ c2ap init my-plugin -o ./plugins --description "Does something useful"
 | `-o, --output` | Output directory | `./output` |
 | `--extension-namespace` | Extension namespace for Claude-specific data | `com.claude.code` |
 | `--strict` | Fail on any warning | `false` |
-| `--convert-commands` | Convert `commands/` to skills. Cursor skills set `disable-model-invocation: true` | `false` |
+| `--convert-commands` | Convert `commands/` to skills (Agent Plugins: portable skills; Cursor: `disable-model-invocation: true`). OpenCode always registers commands and ignores this flag | `false` |
 | `--force` | Overwrite non-empty output directories | `false` |
 | `--json` | Emit a machine-readable JSON summary | `false` |
 | `-n, --dry-run` | Show what would be done without writing | `false` |
 | `-v, --verbose` | Verbose output | `false` |
 | `-q, --quiet` | Suppress output except errors | `false` |
+
+## OpenCode v2
+
+`convert-opencode` writes an OpenCode v2 plugin package. Load it by placing the directory in `.opencode/plugins/` (discovered automatically) or by adding its path to `plugins` in `opencode.json(c)`. A `plugins/` directory next to a project-root `opencode.json(c)` is not discovered on its own.
+
+```bash
+c2ap convert-opencode ./my-claude-plugin -o ./opencode-plugin
+c2ap convert-opencode-dir ./plugins-dir -o ./output
+c2ap convert-opencode-marketplace --repo ./local-marketplace -o ./output
+c2ap validate-opencode ./opencode-plugin
+```
+
+The package follows the [v2 plugin guide](https://opencode.ai/v2/docs/build/plugins/):
+
+```json
+{
+  "name": "opencode-sample-plugin",
+  "version": "1.2.3",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@opencode/plugin": "latest" }
+}
+```
+
+`src/index.ts` default-exports `Plugin.define({ id, setup })`. `setup` registers converted components with the v2 transform APIs.
+
+### Mapping
+
+| Claude plugin | OpenCode v2 |
+|---|---|
+| Plugin package | `package.json` (`type: "module"`, `exports["."]`, dependency `@opencode/plugin`) and `src/index.ts` |
+| `skills/*/SKILL.md`, root `SKILL.md` | `ctx.skill.transform` → `editor.add({ id, name, description, location, content })`. The skill file is also written at `skills/<name>/SKILL.md` and `location` points at it |
+| `commands/*.md` | `ctx.command.transform` → `editor.add({ name, description, execute })`. `execute` calls `ctx.session.prompt` with the command body. `$ARGUMENTS` is replaced with `prompt.text` |
+| `agents/*.md` | `ctx.agent.transform` → `editor.update(id, ...)`. Sets `description`, `mode: "subagent"`, `system` (the prompt), `permissions`, and `color` / `steps` when they match [Agent.Info](https://opencode.ai/v2/docs/build/plugins/). v2 has no `editor.add` for agents; `update` supplies the fields on that id |
+| `.mcp.json` stdio | `ctx.mcp.transform` → `editor.set(name, { type: "local", command, environment, cwd })`. `command` is a string array. `${CLAUDE_PLUGIN_ROOT}` becomes `path.join(root, ...)` inside the package |
+| `.mcp.json` `http` and `sse` | `editor.set(name, { type: "remote", url, headers })`. SSE is warned because v2 has one remote transport |
+| `README.md`, `LICENSE`, `CHANGELOG.md` | Copied to the package root |
+
+OpenCode v2 agent permissions are `{ action, resource, effect }` rules. A Claude `tools` allowlist becomes a deny-all rule followed by `allow` rules for the mapped actions (`read`, `edit`, `bash`, and the other built-in tool names). An omitted tools list becomes `{ action: "*", resource: "*", effect: "allow" }`.
+
+### Sidecar
+
+Claude data that v2 plugins do not load is copied to `extensions/<namespace>/` (default `extensions/com.claude.code/`) and reported as a warning:
+
+- `hooks/` — Claude hook entries run shell commands. OpenCode v2 hooks are `ctx.tool.hook`, `ctx.session.hook`, `ctx.shell.hook`, and `ctx.permission.hook`, which are not a translation of those command configs
+- `workflows/`, `monitors/`, `output-styles/`, `themes/`, `evals/`, `scripts/`, `bin/`
+- `.lsp.json`, `settings.json`, and the original `.mcp.json`
+- Manifest `userConfig`, `dependencies`, `channels`, and `defaultEnabled`
+
+`--convert-commands` applies to Agent Plugins and Cursor. OpenCode conversion always registers `commands/` through `ctx.command.transform` and ignores this flag.
 
 ## Conversion Mappings
 

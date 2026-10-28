@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::agent_plugins::mcp::{AgentMcpConfig, AgentMcpServer, MCP_SCHEMA};
+use crate::agent_plugins::rules;
 use crate::claude::mcp::{ClaudeMcpConfig, ClaudeMcpServer};
 use crate::convert::env_vars;
 
@@ -70,6 +71,16 @@ fn convert_stdio(
 
     let command_result = env_vars::transform_command(command);
     server_warnings.extend(command_result.warnings);
+    if !rules::is_valid_stdio_command(&command_result.value)
+        && !server_warnings
+            .iter()
+            .any(|w| w.contains("does not expand placeholders in command"))
+    {
+        server_warnings.push(format!(
+            "command '{}' must be a bare executable name or a './'-relative path (Agent Plugins §7.2.1)",
+            command_result.value
+        ));
+    }
 
     let args = server.args.as_ref().map(|args| {
         args.iter()
@@ -108,6 +119,12 @@ fn convert_stdio(
     let cwd = server.cwd.as_deref().map(|cwd| {
         let result = env_vars::transform_env_value(cwd);
         server_warnings.extend(result.warnings);
+        if !rules::is_valid_stdio_cwd(&result.value) {
+            server_warnings.push(format!(
+                "cwd '{}' is not a valid Agent Plugins form (must be './…', '${{PLUGIN_ROOT}}…', or '${{PLUGIN_DATA}}…'; §7.2.1)",
+                result.value
+            ));
+        }
         result.value
     });
 
@@ -141,14 +158,19 @@ fn convert_remote(name: &str, server: &ClaudeMcpServer) -> (Option<AgentMcpServe
     let Some(url) = server.url.as_deref() else {
         return (None, warnings);
     };
-    if url.contains("${") {
-        warnings.push(format!(
-            "MCP server '{}': url '{}' contains a placeholder; Agent Plugins does not expand placeholders in url",
-            name, url
-        ));
+    if let Err(msg) = rules::validate_remote_url(url) {
+        warnings.push(format!("MCP server '{}': {}", name, msg));
     }
     if let Some(headers) = &server.headers {
+        let mut seen = HashSet::new();
         for (key, value) in headers {
+            let lower = key.to_ascii_lowercase();
+            if !seen.insert(lower) {
+                warnings.push(format!(
+                    "MCP server '{}': duplicate header name '{}' (header names are case-insensitive; §7.2.1)",
+                    name, key
+                ));
+            }
             if value.contains("${") {
                 warnings.push(format!(
                     "MCP server '{}': header '{}' contains a placeholder; Agent Plugins does not expand placeholders in header values",
@@ -371,6 +393,53 @@ mod tests {
         let (agent, warnings) = convert(&claude);
         assert_eq!(agent.mcp_servers.len(), 1);
         assert!(warnings.iter().any(|w| w.contains("placeholder")));
+    }
+
+    #[test]
+    fn warns_on_invalid_cwd_and_absolute_command() {
+        let mut servers = HashMap::new();
+        servers.insert(
+            "bad".to_string(),
+            ClaudeMcpServer {
+                command: Some("/usr/bin/node".to_string()),
+                args: None,
+                env: None,
+                server_type: None,
+                url: None,
+                headers: None,
+                headers_helper: None,
+                cwd: Some("/tmp".to_string()),
+            },
+        );
+        let claude = ClaudeMcpConfig {
+            mcp_servers: servers,
+        };
+        let (_, warnings) = convert(&claude);
+        assert!(warnings.iter().any(|w| w.contains("bare executable")));
+        assert!(warnings.iter().any(|w| w.contains("cwd")));
+    }
+
+    #[test]
+    fn warns_on_non_loopback_http() {
+        let mut servers = HashMap::new();
+        servers.insert(
+            "remote".to_string(),
+            ClaudeMcpServer {
+                command: None,
+                args: None,
+                env: None,
+                server_type: Some("http".to_string()),
+                url: Some("http://example.com/mcp".to_string()),
+                headers: None,
+                headers_helper: None,
+                cwd: None,
+            },
+        );
+        let claude = ClaudeMcpConfig {
+            mcp_servers: servers,
+        };
+        let (_, warnings) = convert(&claude);
+        assert!(warnings.iter().any(|w| w.contains("HTTPS")));
     }
 
     #[test]

@@ -73,7 +73,7 @@ Both the modern `{name, owner, plugins: [...]}` marketplace format and the legac
 
 ### Validate an existing Agent Plugins plugin
 
-Check a plugin directory (converted or hand-written) against the Agent Plugins v1.0.0 rules without fetching schemas:
+Check a plugin directory (converted or hand-written) against the Agent Plugins Specification v1.0.0 rules without fetching schemas. Validation covers manifest fields (§5), skill frontmatter, MCP `command`/`cwd`/`url`/`headers` shape (§7.2.1), reserved env keys (§9.2), and plugin/MCP `$schema` version alignment (§10.1):
 
 ```bash
 c2ap validate ./output
